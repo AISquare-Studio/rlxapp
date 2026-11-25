@@ -1,0 +1,199 @@
+name: CI
+
+# Triggers mirror rlx's ci.yml: every PR into main or a release train (rc/**), every
+# push to them, and runs by hand (`gh workflow run ci.yml --ref <branch>`).
+on:
+  pull_request:
+    branches: [main, "rc/**"]
+  push:
+    branches: [main, "rc/**"]
+  workflow_dispatch:
+
+# Cancel superseded runs on the same branch or PR. As in rlx, runs are grouped by
+# event too, so a push and a run by hand on the same ref don't cancel each other.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+# THE LAYOUT
+#   app     one job per OS (macOS, Windows, Linux). Each job runs:
+#             - web lint, typecheck and tests;
+#             - Rust fmt, clippy and tests;
+#             - an unsigned `tauri build` of that OS's installers;
+#             - a smoke test of the built binary (under xvfb on Linux): it must paint
+#               its first frame and stay up for 5 s;
+#             - idle memory: on Windows and Linux, scripts/idle-memory.mjs (private
+#               working set and PSS); on macOS, scripts/measure-budgets.sh
+#               (phys_footprint, plus installer size and cold start);
+#             - the installer sizes.
+#           The jobs then upload the installers as run artifacts.
+#   ci-ok   passes only when every app job did: the one check for branch protection
+#           to require, however many legs there are.
+#
+# main holds no app code until the release train lands (only the README, LICENSE and
+# this workflow). Every app step is therefore guarded by
+# hashFiles('src-tauri/Cargo.toml') != '', and on main the jobs pass as no-ops.
+
+jobs:
+  app:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: macOS
+            os: macos-latest
+            # DMGs are built only in CI: building one opens Finder windows (see README).
+            bundles: app,dmg
+            binary: src-tauri/target/release/bundle/macos/rlx.app/Contents/MacOS/rlxapp
+          - name: Windows
+            os: windows-latest
+            bundles: msi,nsis
+            binary: src-tauri/target/release/rlxapp.exe
+          - name: Linux
+            os: ubuntu-24.04
+            bundles: deb,rpm,appimage
+            binary: src-tauri/target/release/rlxapp
+    defaults:
+      run:
+        shell: bash
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: No app tree on this ref, nothing to build
+        if: hashFiles('src-tauri/Cargo.toml') == ''
+        run: echo "::notice::src-tauri/Cargo.toml is absent on this ref; the app steps are skipped."
+
+      - name: Install Linux system dependencies (WebKitGTK 4.1, xvfb)
+        if: runner.os == 'Linux' && hashFiles('src-tauri/Cargo.toml') != ''
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential file libssl-dev libxdo-dev \
+            libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev \
+            xvfb
+
+      - uses: actions/setup-node@v7
+        if: hashFiles('src-tauri/Cargo.toml') != ''
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - name: Install Rust (version pinned in rust-toolchain.toml)
+        if: hashFiles('src-tauri/Cargo.toml') != ''
+        run: |
+          rustup toolchain install
+          rustc --version
+          cargo --version
+
+      - uses: Swatinem/rust-cache@v2
+        if: hashFiles('src-tauri/Cargo.toml') != ''
+        with:
+          workspaces: src-tauri -> target
+
+      - name: Install npm dependencies
+        if: hashFiles('src-tauri/Cargo.toml') != ''
+        run: npm ci
+
+      - name: Lint (web)
+        if: hashFiles('src-tauri/Cargo.toml') != ''
+        run: npm run lint
+
+      - name: Typecheck (web)
+        if: hashFiles('src-tauri/Cargo.toml') != ''
+        run: npm run typecheck
+
+      - name: Test (web)
+        if: hashFiles('src-tauri/Cargo.toml') != ''
+        run: npm test
+
+      - name: Format check (Rust)
+        if: hashFiles('src-tauri/Cargo.toml') != ''
+        working-directory: src-tauri
+        run: cargo fmt --check
+
+      - name: Clippy (Rust)
+        if: hashFiles('src-tauri/Cargo.toml') != ''
+        working-directory: src-tauri
+        run: cargo clippy --locked --all-targets -- -D warnings
+
+      - name: Test (Rust)
+        if: hashFiles('src-tauri/Cargo.toml') != ''
+        working-directory: src-tauri
+        run: cargo test --locked
+
+      - name: Build installers (unsigned)
+        if: hashFiles('src-tauri/Cargo.toml') != ''
+        run: npm run tauri build -- --bundles ${{ matrix.bundles }}
+
+      - name: Smoke test (xvfb)
+        if: runner.os == 'Linux' && hashFiles('src-tauri/Cargo.toml') != ''
+        run: xvfb-run --auto-servernum node scripts/smoke-test.mjs "${{ matrix.binary }}"
+
+      - name: Smoke test
+        if: runner.os != 'Linux' && hashFiles('src-tauri/Cargo.toml') != ''
+        run: node scripts/smoke-test.mjs "${{ matrix.binary }}"
+
+      - name: Idle memory (xvfb, informational)
+        if: runner.os == 'Linux' && hashFiles('src-tauri/Cargo.toml') != ''
+        run: xvfb-run --auto-servernum node scripts/idle-memory.mjs "${{ matrix.binary }}"
+
+      - name: Idle memory (informational)
+        if: runner.os == 'Windows' && hashFiles('src-tauri/Cargo.toml') != ''
+        run: node scripts/idle-memory.mjs "${{ matrix.binary }}"
+
+      - name: Installer sizes
+        if: hashFiles('src-tauri/Cargo.toml') != ''
+        run: |
+          node scripts/installer-sizes.mjs | tee sizes.md
+          {
+            echo "### Installers (${{ matrix.name }}); budget <= 25 MB"
+            cat sizes.md
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Measure budgets (informational)
+        if: runner.os == 'macOS' && hashFiles('src-tauri/Cargo.toml') != ''
+        run: |
+          scripts/measure-budgets.sh --runs 3 | tee budgets.txt
+          {
+            echo '### Budgets (virtualized macOS CI runner; numbers are noisy, local Apple-silicon runs are the reference)'
+            echo '```'
+            cat budgets.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload installers
+        if: hashFiles('src-tauri/Cargo.toml') != ''
+        uses: actions/upload-artifact@v7
+        with:
+          name: rlx-${{ runner.os }}-${{ runner.arch }}
+          path: |
+            src-tauri/target/release/bundle/dmg/*.dmg
+            src-tauri/target/release/bundle/nsis/*.exe
+            src-tauri/target/release/bundle/msi/*.msi
+            src-tauri/target/release/bundle/deb/*.deb
+            src-tauri/target/release/bundle/rpm/*.rpm
+            src-tauri/target/release/bundle/appimage/*.AppImage
+          if-no-files-found: error
+          retention-days: 14
+
+  ci-ok:
+    name: ci-ok
+    if: always()
+    needs: [app]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Every app job passed
+        run: |
+          echo "app: ${{ needs.app.result }}"
+          test "${{ needs.app.result }}" = success
