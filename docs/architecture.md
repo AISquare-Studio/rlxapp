@@ -2,11 +2,13 @@
 
 Status: draft for the owner's review, 2026-11-25. It describes the target design and doesn't depend on the skeleton and CI being built in parallel.
 
-Conventions: **(E*n*)** and **(R*n*)** cite the [evidence log](#17-evidence-log) (Claude Code 2.1.332, rlx 0.10.1); rlx file:line links are permalinks to commit `c6b523c3`; **unconfirmed** marks anything not yet checked.
+Conventions: **(E*n*)** and **(R*n*)** cite the [evidence log](#18-evidence-log) (Claude Code 2.1.332, rlx 0.10.1); rlx file:line links are permalinks to commit `c6b523c3`; **unconfirmed** marks anything not yet checked.
 
 ## 1. Goals and budgets
 
 rlxapp is a desktop app for people who don't use a terminal (GTM teams, team leads, working professionals). It runs rlx and Claude Code in the background and shows results as widget dashboards; developers keep the rlx TUI.
+
+**Name** (owner decision): users see **rlx** (rlx.app, window title, menus, installers); `rlxapp` is only the repo. The bundle ID `studio.aisquare.rlx` is fixed before any release, since it keys app data and Keychain items. The bundle's inner executable stays `rlxapp`, so a Linux `/usr/bin/rlx` never clashes with the CLI.
 
 **Stack: Tauri 2, a Rust core and a web UI in the system webview** (owner decision, 2026-11-25, chosen over GPUI).
 - **Discord, the visual reference.** Discord's CTO said on X (2026-11-04) that its desktop client is moving from Electron to Rust on GPUI, keeping a webview only for embedded content (YouTube, Activities). Discord has made no announcement of its own; both sources report those posts ([InfoQ](https://infoq.com/news/2026/11/discord-rust-rewrite-gpui-zed), [Inven Global](https://www.invenglobal.com/articles/28182/discord-cto-confirms-the-desktop-and-mobile-apps-are-being-rebuilt-in-rust)).
@@ -15,7 +17,7 @@ rlxapp is a desktop app for people who don't use a terminal (GTM teams, team lea
 | Budget | Target | How it is measured |
 |---|---|---|
 | Installer | ≤ 25 MB | CI fails any release artifact (`.dmg`, `.exe`, `.AppImage`/`.deb`) over the limit. |
-| Idle RAM | ≤ 150 MB | Release build on Apple silicon, cached default dashboard, 60 s after launch, no run in flight: `footprint` of the app plus WebKit helpers; rlxd reported separately. |
+| Idle RAM | ≤ 150 MB | Release build, cached default dashboard, 30 s idle, no run in flight, median of 3: `phys_footprint` (macOS), private working set (Windows) or PSS (Linux), summed over the app and its webview helpers; rlxd separately. |
 | Cold start | ≤ 1.5 s | Process spawn to first dashboard paint (`performance.mark`), median of 5 launches after a full quit, Apple silicon. |
 
 Known risk: WebKitGTK on Linux, tested in CI from the first commit.
@@ -63,9 +65,8 @@ flowchart TB
   RLXD -->|"tool permission requests, ask F"| GATE
 ```
 
-- **Tauri 2 shell.** The web UI is first-party; widget iframes are untrusted and talk only to the UI (§5.3).
 - **Process supervisor.** Starts, watches and restarts rlxd, and stops the app's rlx processes around upgrades (§11); rlxd owns run process trees.
-- **Engine interface.** The only boundary to agentic work, all of which goes through rlx (§14); the core never spawns `claude`.
+- **Engine interface.** The only boundary to agentic work, all of which goes through rlx (§15); the core never spawns `claude`.
 
 ```rust
 #[async_trait]
@@ -83,7 +84,7 @@ pub struct RunRequest {
     pub allowed_tools: Vec<String>,     // empty = no tools
     pub needs_connectors: Vec<String>,  // must be "connected" in system/init (§4)
     pub output_schema: Option<serde_json::Value>,
-    pub session_id: Uuid,               // chosen by the core, for resume
+    pub session_id: Uuid,               // for resume
     pub gate: Arc<dyn ToolGate>,        // decides every write-classified call
 }
 ```
@@ -98,7 +99,7 @@ Claude Code is the only auth; the app has no accounts or tokens. `claude auth st
 - `rlx accounts add` refuses `--json` and needs a TTY ([accounts.py:1197-1210](https://github.com/AISquare-Studio/rlx/blob/c6b523c3/src/aisquare/cli/accounts.py#L1197-L1210)). Ask G: a non-TTY sign-in emitting these steps as JSON lines.
 - `claude auth login` defaults to `--claudeai` (E3); whether it completes without a TTY is unconfirmed. Last resort: a hidden pseudo-terminal that surfaces only the URL.
 
-**Keychain (ask E, answered from rlx's code).** rlx reads Claude Code's login via `/usr/bin/security` ([claude_accounts.py:1069](https://github.com/AISquare-Studio/rlx/blob/c6b523c3/src/aisquare/core/claude_accounts.py#L1069)), already on the item's access list, so a GUI app triggers no prompt; only a locked Keychain shows its unlock dialog (rlx waits 5 s, [:1071](https://github.com/AISquare-Studio/rlx/blob/c6b523c3/src/aisquare/core/claude_accounts.py#L1071)). The app never reads the item itself (it isn't on the list, and a re-signed update can void "Always Allow"). It passes `CLAUDE_CONFIG_DIR` and `CLAUDE_SECURESTORAGE_CONFIG_DIR` to rlx from a login shell (`$SHELL -lc`): the item name is hashed from them ([:1139](https://github.com/AISquare-Studio/rlx/blob/c6b523c3/src/aisquare/core/claude_accounts.py#L1139)), and a Finder-launched app lacks shell-profile variables.
+**Keychain (ask E, answered from rlx's code).** rlx reads Claude Code's login via `/usr/bin/security` ([claude_accounts.py:1069](https://github.com/AISquare-Studio/rlx/blob/c6b523c3/src/aisquare/core/claude_accounts.py#L1069)), already on the item's access list, so a GUI app triggers no prompt; only a locked Keychain shows its unlock dialog (rlx waits 5 s, [:1071](https://github.com/AISquare-Studio/rlx/blob/c6b523c3/src/aisquare/core/claude_accounts.py#L1071)). The app never reads the item itself: it isn't on the access list. It passes `CLAUDE_CONFIG_DIR` and `CLAUDE_SECURESTORAGE_CONFIG_DIR` to rlx from a login shell (`$SHELL -lc`): the item name is hashed from them ([:1139](https://github.com/AISquare-Studio/rlx/blob/c6b523c3/src/aisquare/core/claude_accounts.py#L1139)), and a Finder-launched app lacks shell-profile variables.
 
 **Never pass `--bare`:** it skips OAuth and the keychain (E2). The app's own model calls are engine runs on the user's plan; usage comes from `rlx --json accounts list --usage` (R3).
 
@@ -143,13 +144,13 @@ type WidgetManifest = {
   entry: "index.html";         // one file, ≤ 512 KB, inline JS/CSS
   data?: DataJob;              // absent for clock/timer/pomodoro
   actions: ("openUrl" | "notify" | "draftSend" | "refresh")[];
-  settings?: JSONSchema;       // e.g. intervalMinutes
+  settings?: JSONSchema;
 };
 type DataJob = {
   connector: string;           // "claude.ai Slack"
   tools: string[];             // read tools only
   prompt: string;              // template: {{settings.*}} {{state.cursor}} {{owner}}
-  output: JSONSchema;          // run output schema; the core validates again
+  output: JSONSchema;          // validated again by the core
   every: { minutes: number } | { cron: string };
   runWhen: "app-open" | "background";
 };
@@ -160,7 +161,7 @@ type DataJob = {
 ```ts
 type ToWidget =   // core → widget
   | { type: "init"; v: 1; widgetId: string; settings: object; state: object; theme: Theme }
-  | { type: "data"; v: 1; data: unknown; fetchedAt: string; stale: boolean } // matches DataJob.output
+  | { type: "data"; v: 1; data: unknown; fetchedAt: string; stale: boolean }
   | { type: "status"; v: 1; status: "refreshing" | "ok" | "needs-auth" | "error" };
 type FromWidget = // widget → core
   | { type: "ready" | "refresh"; v: 1 }
@@ -171,7 +172,7 @@ type FromWidget = // widget → core
   | { type: "resize"; v: 1; h: number };
 ```
 
-Invalid data never reaches the widget (it keeps its last good data and shows `error`); widgets can't call tools or read other widgets, and undeclared actions are dropped.
+Invalid data never reaches the widget (it keeps its last good data and shows `error`); widgets can't call tools, and undeclared actions are dropped.
 
 ### 5.3 Rendering: sandboxed iframe, CSP, bridge
 
@@ -299,7 +300,7 @@ type StandingApproval = {
 
 ### 8.4 Audit log
 
-An append-only, hash-chained `audit` table (`prev_hash` per row), shown in Activity, exportable as JSONL, never leaving the machine. Rows hold seq, time, actor (owner, run, approval, `auto`), event (`draft.*`, `approval.*`, `check.*`, `send.*`, `mode.changed`), connector, destination, body hash, verdict, reasons and result (message ID or permalink).
+An append-only, hash-chained `audit` table (`prev_hash` per row), shown in Activity, exportable as JSONL, never leaving the machine. Rows hold time, actor, event (`draft.*`, `approval.*`, `check.*`, `send.*`, `mode.changed`), connector, destination, body hash, verdict and result (message ID or permalink).
 
 ### 8.5 Prompt injection
 
@@ -316,21 +317,21 @@ An append-only, hash-chained `audit` table (`prev_hash` per row), shown in Activ
 
 **A (recommended): one app with progressive disclosure.** Everyone sees Home (widgets), Tasks, Inbox (drafts, needs-you), Activity and Settings; a Developer toggle adds Fleet, Boards, read-only Panes and **Open in terminal** (`rlx ui`, R2). Pros: one install, updater and codebase; reversible. Cons: developer features must stay out of the way.
 
-**B (alternative): two editions from one codebase**, "rlxapp" and "rlxapp Dev": more focused, but double the artifacts and QA.
+**B (alternative): two editions from one codebase**, "rlx" and "rlx Dev": more focused, but double the artifacts and QA.
 
 The shell implements A; the owner decides after seeing it.
 
 ## 10. Brand and themes
 
 Owner decision, 2026-11-25: rlx's own `r\x` mark, no new logo.
-- **The mark.** rlx's [docs/assets/rlx-logo.svg](https://github.com/AISquare-Studio/rlx/blob/c6b523c3/docs/assets/rlx-logo.svg): JetBrains Mono Medium glyphs as paths, fill #2F74F0, viewBox 1606×940, copied unchanged with its SIL OFL 1.1 attribution. Other colours are fill changes on the same paths.
-- **Where.** App icon (the mark on a #08090B tile, all icons from one 1024 px master via `tauri icon`), monochrome tray icon (template image on macOS), header, splash, about box, installer and DMG, favicon, README, sign-off link.
-- **Themes.** Default "rlx" = the TUI's `RLX_THEME` ([theme.py:80](https://github.com/AISquare-Studio/rlx/blob/c6b523c3/src/aisquare/cli/ui/theme.py#L80)): primary #2F74F0, accent #14B8A6, secondary #E8FF3A, background #08090B, surface #121317, panel #1A1B20, labels on blue in #08090B. Plus a light variant, more themes and a user-picked accent, all as CSS variables that widgets get in `init` (§5.2).
+- **The mark.** rlx's [docs/assets/rlx-logo.svg](https://github.com/AISquare-Studio/rlx/blob/c6b523c3/docs/assets/rlx-logo.svg): JetBrains Mono Medium glyphs as paths, fill #2F74F0, viewBox 1606×940, copied unchanged with its SIL OFL 1.1 attribution. Recolours change only the fill.
+- **Where.** App icon (the mark on a #08090B tile; all icons from one 1024 px master via `tauri icon`), monochrome tray template, header, splash, about box, installers, favicon, README, sign-off link.
+- **Themes.** Default "rlx" = the TUI's `RLX_THEME` ([theme.py:80](https://github.com/AISquare-Studio/rlx/blob/c6b523c3/src/aisquare/cli/ui/theme.py#L80)): primary #2F74F0 on #08090B, with ground-coloured labels on blue. Plus a light variant, more themes and a user-picked accent, all as CSS variables that widgets get in `init` (§5.2).
 - **Tests.** Every theme passes WCAG 4.5:1 for text and 3:1 for UI parts; icon, tray and header path data equal the SVG's; "rlx" tokens equal `RLX_THEME`.
 
 ## 11. Install and update
 
-**The app.** Tauri's updater checks signed manifests on GitHub Releases and asks first: notarized `.dmg` (arm64 first), per-user NSIS `.exe` with the WebView2 bootstrapper, `.AppImage`/`.deb` (WebKitGTK 4.1).
+**The app.** Tauri's updater checks signed manifests on GitHub Releases and asks first: notarized `.dmg` (arm64 first), per-user NSIS `.exe` with the WebView2 bootstrapper, `.AppImage`/`.deb` (WebKitGTK 4.1). Local builds are `--bundles app` only (no DMG); DMGs and installers come from CI.
 
 **The engine.** rlx (with rlxd) and Python are not bundled (the 25 MB budget); first run runs rlx's installer behind a progress view. Needs (ask B) against today:
 
@@ -343,32 +344,38 @@ Owner decision, 2026-11-25: rlx's own `r\x` mark, no new logo.
 
 rlx's installer also installs Claude Code from `CLAUDE_INSTALLER_URL` ([install.sh:61](https://github.com/AISquare-Studio/rlx/blob/c6b523c3/install.sh#L61)) when `wants_claude` holds ([:292-293](https://github.com/AISquare-Studio/rlx/blob/c6b523c3/install.sh#L292-L293)); Claude Code also has `claude install` and `claude update` (E8).
 
-**Updates.** Claude Code updates itself. For rlx (ask E), `rlx --json upgrade --yes` (`--yes` is needed off a terminal, R5) refuses while an rlx UI, a Windows launcher or another program's `rlx` is present ([lifecycle.py:442-446](https://github.com/AISquare-Studio/rlx/blob/c6b523c3/src/aisquare/services/lifecycle.py#L442-L446)). Other rlx processes don't block it on macOS and Linux but run mixed old and new code until restarted ([:425-431](https://github.com/AISquare-Studio/rlx/blob/c6b523c3/src/aisquare/services/lifecycle.py#L425-L431)); on Windows they would likely fail the reinstall (inferred, unconfirmed). So the app checks `rlx --json upgrade --check` (`asqs`, `launchers`, `live_agents`, `remote`: [install.py:96-105](https://github.com/AISquare-Studio/rlx/blob/c6b523c3/src/aisquare/cli/install.py#L96-L105)), stops its rlx processes (rlxd included), upgrades and restarts them (ask K).
+**Updates.** Claude Code updates itself. For rlx (ask E), `rlx --json upgrade --yes` (`--yes` is needed off a terminal, R5) refuses while an rlx UI, a Windows launcher or another program's `rlx` is present ([lifecycle.py:442-446](https://github.com/AISquare-Studio/rlx/blob/c6b523c3/src/aisquare/services/lifecycle.py#L442-L446)). Other rlx processes don't block it on macOS and Linux but run mixed old and new code until restarted ([:425-431](https://github.com/AISquare-Studio/rlx/blob/c6b523c3/src/aisquare/services/lifecycle.py#L425-L431)); on Windows they would likely fail the reinstall (inferred, unconfirmed). So the app checks `rlx --json upgrade --check` (fields at [install.py:96-105](https://github.com/AISquare-Studio/rlx/blob/c6b523c3/src/aisquare/cli/install.py#L96-L105)), stops its rlx processes (rlxd included), upgrades and restarts them (ask K).
 
-**Branches.** Feature PRs, this doc included, target the release train `rc/0.1.0`, which reaches `main` only on the owner's go; `main` otherwise holds only what GitHub reads there (guarded CI, CODEOWNERS, templates, community files).
+**Branches.** Feature PRs target the release train `rc/0.1.0`, which reaches `main` only on the owner's go; `main` otherwise holds only what GitHub reads there (guarded CI, CODEOWNERS, templates).
 
 ## 12. Platform matrix for v0
 
 | | macOS | Windows | Linux |
 |---|---|---|---|
-| v0 bar | Polished; budgets enforced | Built and smoke-tested in CI | Built and smoke-tested in CI |
+| v0 bar | Polished; budgets enforced | Built, smoke-tested in CI | Same |
 | Arch | arm64 | x64 | x64 |
 | Webview | WKWebView | WebView2 | WebKitGTK 4.1 (**risk**) |
 | Tray | Menu bar (template icon) | System tray | AppIndicator (GNOME needs an extension) |
 | Engine | `FakeEngine`, then `RlxEngine` | Same; rlx's installer needs ask D | Same |
-| CI smoke | Launch, render, §5.3 tests, quit | Same | Same, under Xvfb |
 
-## 13. Local storage and privacy
+## 13. Testing
+
+- **UI:** a ui-tester agent drives the web UI on Vite with `FakeEngine` (no rlx, Claude Code or network).
+- **macOS native:** window, tray and menu checks capture only the app's window with `screencapture -l <windowid>` and drive menus with osascript; never full-screen captures.
+- **Windows and Linux:** tauri-driver in CI, with screenshots as artifacts. Every CI run also launches, renders, runs the §5.3 tests and quits.
+- **Every UI PR** carries a screenshot gallery.
+
+## 14. Local storage and privacy
 
 **Where data lives:** the OS app-data directory holds `rlxapp.db` (SQLite, WAL: runs, jobs, drafts, approvals, audit, widget registry, settings), `widgets/`, `transcripts/` (30 days by default) and rotated `logs/`.
 
-**Privacy.** The app stores no credentials. No telemetry or crash reporting by default; the app's only own traffic is the update check, which can be turned off. Claude Code's `analyticsDisabled` (E4) is the user's setting. **Erase local data** deletes everything.
+**Privacy.** The app stores no credentials. No telemetry or crash reporting by default; the app's only own traffic is the update check, which can be turned off. **Erase local data** deletes everything.
 
-## 14. rlx dependency
+## 15. rlx dependency
 
-**The split, rejected.** The survey proposed simple mode driving `claude -p` directly, with the fleet for developers; on 2026-11-25 the owner ruled that all agent work, in both modes, goes through rlx.
+**The split, rejected.** The survey's direct-`claude -p` simple mode was rejected by the owner on 2026-11-25: all agent work, in both modes, goes through rlx.
 
-**The engine is rlxd** (owner decision, 2026-11-25): a long-running Rust daemon in rlx's Cargo workspace, with a library crate rlxapp depends on, three-OS CI and binaries shipped with rlx. It replaces tmux as process host (portable-pty, ConPTY on Windows), runs headless Claude Code emitting stream-json, takes hooks over a local socket, runs the user scheduler and pushes events to the TUI, rlxapp and Remote. Python stays the orchestration brain and TUI. rlx 0.10.3 carries rlxd, native Windows, the connector surface, a non-project home and asks A–D; rlx's `docs/plans/0.10.3-handoff.md` drafts the app contract.
+**The engine is rlxd** (owner decision, 2026-11-25): a long-running Rust daemon in rlx's Cargo workspace, with a library crate rlxapp depends on, shipped with rlx. It replaces tmux as process host (portable-pty, ConPTY on Windows), runs headless Claude Code emitting stream-json, takes hooks over a local socket, runs the user scheduler and pushes events to the TUI, rlxapp and Remote. Python stays the orchestration brain and TUI. rlx 0.10.3 carries rlxd, native Windows, the connector surface, a non-project home and asks A–D; rlx's `docs/plans/0.10.3-handoff.md` drafts the app contract.
 
 **What rlxd wraps** (E2, E7, E10; connectors in §4):
 - **Streaming.** `-p --output-format stream-json --verbose`. **`--verbose` is required**: without it, `claude` exits 1 with "When using --print, --output-format=stream-json requires --verbose" (E10). `--include-partial-messages` adds partial chunks; `--input-format stream-json` takes streaming input.
@@ -387,13 +394,13 @@ rlx's installer also installs Claude Code from `CLAUDE_INSTALLER_URL` ([install.
 10. Bound to a project folder ([workspace.py:29](https://github.com/AISquare-Studio/rlx/blob/c6b523c3/src/aisquare/core/workspace.py#L29)).
 11. Upgrade blocked while the UI runs ([install.py:100-101](https://github.com/AISquare-Studio/rlx/blob/c6b523c3/src/aisquare/cli/install.py#L100-L101), §11).
 
-**Asks.** From the survey: **A** a versioned JSON envelope (`schema_version`, `ok`, `data`, `error{code,message,hint}`) with published schemas; **B** a silent installer mode (§11); **C** a localhost event stream with token auth (rlxd's push); **D** native Windows for install, accounts, upgrade and doctor; **E** upgrade-while-running and the Keychain prompt, answered (§3, §11). This doc adds:
+**Asks.** From the survey: **A** a versioned JSON envelope (`schema_version`, `ok`, `data`, `error`) with published schemas; **B** a silent installer mode (§11); **C** a localhost event stream with token auth (rlxd's push); **D** native Windows for install, accounts, upgrade and doctor; **E** upgrade-while-running and the Keychain prompt, answered (§3, §11). This doc adds:
 - **F.** rlxd forwards every tool permission request to the app, or lets it inject a PreToolUse hook. **Send safety depends on this.**
 - **G–I.** Non-TTY sign-in with JSON-lines steps (§3); connector listing with read/write annotations and no model turn (§4); session-ID and cancel pass-through (§6).
 - **J.** Runs name their connectors; rlxd holds stdin open and starts the first turn only once they are `connected`, else fails naming the rest (§4).
 - **K.** Long-lived non-UI rlx processes, rlxd included, register so `upgrade` counts them (§11).
 
-## 15. Open questions
+## 16. Open questions
 
 **For the owner:**
 1. Mode A or B (§9)?
@@ -410,34 +417,32 @@ rlx's installer also installs Claude Code from `CLAUDE_INSTALLER_URL` ([install.
 3. rlxd's event transport, auth and `schema_version` (ask C).
 4. Where is the non-developer home, and do user hooks load in app runs?
 
-## 16. Traceability
+## 17. Traceability
 
 | Brief bullet or owner decision | Section |
 |---|---|
-| Native app: macOS, Windows, Linux | §11, §12 |
-| Installs and runs rlx in the background | §2, §6, §11 |
-| No terminal needed; developers keep the TUI; Developer toggle | §3, §9, §15 |
+| Native on three OSes; runs rlx in the background | §2, §6, §11, §12 |
+| No terminal needed; developers keep the TUI; Developer toggle | §3, §9, §16 |
 | Sleek and light; Discord reference; Tauri 2, budgets, WebKitGTK | §1, §12 |
-| Long-running tasks; closing keeps it in the tray | §6, §14 |
+| Long-running tasks; closing keeps it in the tray | §6, §15 |
 | Claude Code is the only auth | §3, §4 |
-| Widgets: build once, extend automatically | §5 |
+| Widgets: build once, extend automatically; generic and agent-made | §5 |
 | Slack digest, Gmail (five sections), clock, timer, pomodoro | §5.6 |
-| Generic per-connector and agent-made widgets | §5.5, §5.4 |
 | Named agent; sign-off with one homepage constant | §7 |
 | Safe sends: three modes | §8 |
-| rlx powers both modes; rlxd | §2, §14 |
+| rlx powers both modes; rlxd | §2, §15 |
 | rlx's `r\x` mark and themes | §10 |
-| Feature PRs target `rc/0.1.0` | §11 |
+| Name, bundle ID, builds, merge model, testing | §1, §11, §13 |
 
-## 17. Evidence log
+## 18. Evidence log
 
-All commands were read-only. Nobody signed in or out, no connector tool was called, and nothing was sent.
+All read-only: no sign-in or sign-out, no connector tool call, nothing sent.
 
 | ID | Command | Showed |
 |---|---|---|
 | E1, E8 | `claude --version`; `claude install --help`, `claude update --help` | `2.1.332`; native install, self-update |
 | E2 | `claude --help` | The flags cited above; `-p` skips the trust dialog; `--bare`: "OAuth and keychain are never read" |
-| E3 | `claude auth login --help`, `claude auth status --help` | `--claudeai` (default), `--console`, `--sso`; `--json` |
+| E3 | `claude auth login --help`, `claude auth status --help` | `--claudeai` default; `--json` |
 | E4 | `claude auth status --json` (values redacted) | `loggedIn`, `authMethod: "claude.ai"`, `subscriptionType`, `analyticsDisabled` |
 | E5 | `claude mcp login --help` | "HTTP, SSE, or claude.ai connector"; `--no-browser` |
 | E6 | `claude -p "Reply with the single word OK. Do not call any tools." --output-format stream-json --verbose --tools "" --no-session-persistence --permission-mode dontAsk --permission-prompts none --setting-sources project`, empty directory, stdin open | Both connectors `connected`, 67 tools, `apiKeySource: "none"` |
@@ -449,5 +454,5 @@ All commands were read-only. Nobody signed in or out, no connector tool was call
 | R3 | `rlx --json accounts list --help` | `--usage`, `--refresh` |
 | R4 | `rlx --json connectors list` | `{"error":"not_implemented",…}`, exit 70 |
 | R5 | `rlx upgrade --help` | `--yes` "required off a terminal" |
-| R6, R7 | `rlx serve --help`; `rlx remote serve --help` | MCP server, `--stdio`, `--port`, bearer token; `--auto-off MINUTES`, ngrok |
+| R6, R7 | `rlx serve --help`; `rlx remote serve --help` | MCP server, bearer token; `--auto-off`, ngrok |
 | R8 | `rlx watch --help` | `--detach` "in a window of the fleet's tmux server" |
