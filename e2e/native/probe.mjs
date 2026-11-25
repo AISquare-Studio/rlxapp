@@ -17,6 +17,7 @@ import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { droppedRawMessages, evaluate, passed, redactKey, toMarkdown } from "./probe-rules.mjs";
 import { defaultBinary, osName, repoRoot } from "./paths.mjs";
+import { stopTree } from "./processes.mjs";
 
 const sleep = (ms) => new Promise((done) => setTimeout(done, ms));
 
@@ -63,11 +64,7 @@ export async function runProbe({ binary = defaultBinary(), timeoutMs = 240_000, 
     }
     await sleep(250);
   }
-  if (!exited) {
-    child.kill();
-    await Promise.race([new Promise((done) => child.once("exit", done)), sleep(5000)]);
-    if (!exited) child.kill("SIGKILL");
-  }
+  await stopTree(child, () => exited !== null);
   rmSync(work, { recursive: true, force: true });
 
   const checks = failure ? [{ id: "report", ok: false, blocking: true, detail: failure }] : evaluate(report, { stderr });

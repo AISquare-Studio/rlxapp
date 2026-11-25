@@ -27,5 +27,6 @@ export async function run({ session, shot, shotElement, assert, logoPaths }) {
   assert.ok(box.w > 0 && box.h > 0, `the header mark is visible (${box.w}x${box.h})`);
 
   await shot("main-window");
-  await shotElement(mark, "header-mark");
+  // The header, not the bare <svg>: WebKitWebDriver snapshots a lone SVG element as black.
+  await shotElement(await session.waitFor("header"), "header");
 }

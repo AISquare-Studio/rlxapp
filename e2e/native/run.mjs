@@ -19,6 +19,7 @@ import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
 import { runProbe } from "./probe.mjs";
 import { defaultBinary, osName, repoRoot, screenshotsDir } from "./paths.mjs";
+import { waitForWebviewsToExit, webviewProcesses } from "./processes.mjs";
 import { Session, startTauriDriver } from "./webdriver.mjs";
 
 const { values } = parseArgs({
@@ -66,6 +67,9 @@ async function runScreens() {
   // The app runs without the probe here: the screens are the product's.
   const env = { ...process.env };
   delete env.RLXAPP_E2E_REPORT;
+  // A WebView2 process left from an earlier launch would swallow the driver's launch.
+  const lingering = await waitForWebviewsToExit();
+  if (lingering.length > 0) console.log(`screens: ${lingering.length} WebView2 process(es) still running before tauri-driver:\n${lingering.join("\n")}`);
   const driver = await startTauriDriver({ port: Number(values.port), nativeDriver: process.env.TAURI_NATIVE_DRIVER, env });
   const results = [];
   try {
@@ -102,7 +106,9 @@ async function runScreens() {
             // no screenshot of a session that never started
           }
         }
-        results.push({ label, ok: false, detail: String(error.message ?? error), ms: Date.now() - started });
+        const left = webviewProcesses();
+        const note = left.length > 0 ? ` [${left.length} WebView2 process(es) running]` : "";
+        results.push({ label, ok: false, detail: `${String(error.message ?? error)}${note}`, ms: Date.now() - started });
       } finally {
         await session?.delete();
       }
