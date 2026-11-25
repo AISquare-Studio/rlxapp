@@ -7,7 +7,7 @@ const rejected = (cmd) => ({ cmd, result: "rejected", message: `${cmd} not allow
 /** A report that passes on an OS with a widget webview and the switch off. */
 function passingReport() {
   return {
-    schema: 2,
+    schema: 3,
     os: "macos",
     policy: { widgetWebview: true, builtins: "widgets", agentWidgets: "off: off until the probe passes" },
     switch: {
@@ -41,7 +41,10 @@ function passingReport() {
         connections: [],
       },
     },
-    hostAfterNavigation: { href: "rlxwidget://localhost/host/", frames: 3 },
+    mount: { ok: true, ids: ["e2e-probe", "e2e-builtin"] },
+    reload: { loadsBefore: 1, loadsAfter: 2, frames: ["e2e-probe", "e2e-builtin"] },
+    framesBeforeNavigation: 2,
+    hostAfterNavigation: { href: "rlxwidget://localhost/host/", frames: 2 },
     main: { canary: { result: "resolved", value: 1 }, frameSrc: "blocked: frame-src", actionRoute: "rejected Load failed", rtc: "gathering complete" },
     canary: [{ from: "main-control", webview: "main" }],
     actions: [{ widgetId: "e2e-builtin", message: { type: "refresh", v: 1 } }],
@@ -139,13 +142,34 @@ describe("isolation probe rules", () => {
       agentRegister: "refused: agent-made widgets are off",
       builtinRegister: "refused: this OS has no widget webview in v0",
       attach: "refused: this OS has no widget webview in v0",
+      probeAttach: "not needed",
     };
     report.webviews = ["main"];
     report.host = null;
     report.actions = [];
     expect(failing(evaluate(report))).toEqual([]);
     report.webviews = ["main", "widgets"];
-    expect(failing(evaluate(report))).toContain("no widget webview on this OS");
+    expect(failing(evaluate(report))).toContain("no other webviews");
+  });
+
+  it("probes a webview the product doesn't attach, when the probe attached one (Windows)", () => {
+    const report = passingReport();
+    report.policy = { widgetWebview: false, builtins: "main", agentWidgets: "off: no widget webview in v0" };
+    report.switch.attach = "refused: this OS has no widget webview in v0";
+    report.switch.builtinRegister = "refused: this OS has no widget webview in v0";
+    report.switch.probeAttach = "attached for the probe only";
+    expect(failing(evaluate(report))).toEqual([]);
+    report.listeners.iframe.hits = ["1 tcp GET /widget-iframe/navigate HTTP/1.1"];
+    expect(failing(evaluate(report))[0]).toMatch(/widget iframe: 0 connections/);
+  });
+
+  it("fails when a mount is reported before it happened, or a reload loses the grid", () => {
+    const early = passingReport();
+    early.mount = { ok: false, error: "the host page didn't answer the mount" };
+    expect(failing(evaluate(early))).toContain("widgets_mount resolves once the host page has mounted");
+    const lost = passingReport();
+    lost.reload.frames = [];
+    expect(failing(evaluate(lost))).toContain("a reload of the widgets webview restores the grid");
   });
 
   it("reads Tauri's dropped-key lines without keeping the key", () => {

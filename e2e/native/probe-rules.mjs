@@ -65,12 +65,15 @@ function evaluateChecks(report, stderr) {
   // as "must stay off" and the run continues.
   const gate = (id, ok, detail) => checks.push({ id, ok: Boolean(ok), gate: true, detail });
 
-  if (!report || report.schema !== 2) {
+  if (!report || report.schema !== 3) {
     check("report", false, "no report, or an unknown schema");
     return checks;
   }
 
   const policy = report.policy ?? {};
+  // Where the product has no widget webview (Windows in v0), the probe may attach one anyway
+  // to measure the webview; its checks then run the same way.
+  const probed = policy.widgetWebview === true || String(report.switch?.probeAttach ?? "").startsWith("attached");
   const agentOff = String(policy.agentWidgets ?? "").startsWith("off");
   const listeners = report.listeners ?? {};
   const canary = report.canary ?? [];
@@ -100,7 +103,7 @@ function evaluateChecks(report, stderr) {
 
   // Connections. Each side has its own listener; a hit is classified by what it carried.
   for (const side of ["host", "iframe"]) {
-    if (!policy.widgetWebview) break;
+    if (!probed) break;
     const hits = (listeners[side]?.hits ?? []).map(classifyHit);
     const contract = hits.filter((h) => h.vector !== "preconnect");
     const silent = hits.filter((h) => h.vector === "preconnect");
@@ -142,16 +145,37 @@ function evaluateChecks(report, stderr) {
 
   const webviews = report.webviews ?? [];
   if (!policy.widgetWebview) {
-    // Linux in v0: built-ins render in main, and no widget webview exists.
-    check("no widget webview on this OS", webviews.length === 1 && webviews[0] === "main", `webviews: ${webviews.join(", ")}`);
-    check("attach refused", String(report.switch?.attach).startsWith("refused"), String(report.switch?.attach));
-    return checks;
+    // Windows and Linux in v0: built-ins render in main, and the product attaches no widget
+    // webview. Only the probe's own attach (Windows) may add one.
+    check("the product attaches no widget webview here", String(report.switch?.attach).startsWith("refused"), String(report.switch?.attach));
+    const expected = probed ? ["main", "widgets"] : ["main"];
+    check(
+      "no other webviews",
+      JSON.stringify(webviews) === JSON.stringify(expected),
+      `webviews: ${webviews.join(", ")}${probed ? " (widgets attached for the probe only)" : ""}`,
+    );
+    if (!probed) return checks;
+  } else {
+    check(
+      "widgets webview attached",
+      report.switch?.attach === "attached" && webviews.includes("widgets") && webviews.includes("main"),
+      `${report.switch?.attach}; webviews: ${webviews.join(", ")}`,
+    );
   }
 
+  const mount = report.mount ?? {};
+  const mountedIds = mount.ids ?? [];
   check(
-    "widgets webview attached",
-    report.switch?.attach === "attached" && webviews.includes("widgets") && webviews.includes("main"),
-    `${report.switch?.attach}; webviews: ${webviews.join(", ")}`,
+    "widgets_mount resolves once the host page has mounted",
+    mount.ok === true && mountedIds.includes("e2e-probe") && mountedIds.includes("e2e-builtin") && !mountedIds.includes("e2e-agent"),
+    mount.ok ? `mounted: ${mountedIds.join(", ")}` : String(mount.error),
+  );
+  const reload = report.reload ?? {};
+  const restored = reload.frames ?? [];
+  check(
+    "a reload of the widgets webview restores the grid",
+    reload.loadsAfter > reload.loadsBefore && JSON.stringify([...restored].sort()) === JSON.stringify([...mountedIds].sort()),
+    `page loads ${reload.loadsBefore} → ${reload.loadsAfter}; frames after: ${restored.join(", ") || "none"}`,
   );
 
   const host = report.host;
@@ -245,7 +269,7 @@ function evaluateChecks(report, stderr) {
   const after = report.hostAfterNavigation;
   check(
     "self-navigation off the widget scheme blocked",
-    after && typeof after.href === "string" && after.href === host.href && after.frames === frames.length,
+    after && typeof after.href === "string" && after.href === host.href && after.frames === report.framesBeforeNavigation,
     after ? `host still at ${after.href}, ${after.frames} frames` : "host page gone after navigating",
   );
   return checks;
