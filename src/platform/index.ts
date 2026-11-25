@@ -1,11 +1,12 @@
 /**
- * Platform adapter: the only place the UI talks to Tauri.
+ * Platform adapter: what the UI needs from the host.
  *
- * Inside the Tauri webview, calls go to the Rust core over IPC. In a plain
- * browser (`npm run dev`, UI tests) Tauri's internals are absent, so the
- * adapter falls back to in-memory mocks and the UI still runs.
+ * Inside the Tauri webview, calls go to the Rust core through the engine adapter
+ * (../engine/adapter/native.ts). In a plain browser (`npm run dev`, UI tests) Tauri's internals
+ * are absent, so the adapter falls back to in-memory mocks and the UI still runs.
  */
-import { invoke, isTauri } from "@tauri-apps/api/core";
+import { isTauri } from "@tauri-apps/api/core";
+import { nativeAppInfo, nativeReportFirstPaint } from "../engine/adapter/native.ts";
 
 export type Runtime = "native" | "browser";
 
@@ -20,24 +21,37 @@ export interface AppInfo {
 /** How the first-paint timestamp was obtained (see ./firstPaint.ts). */
 export type PaintSource = "fcp" | "raf";
 
+/**
+ * How an agent-made widget renders here: inline HTML in a sandboxed iframe (the browser
+ * preview), or not at all. In the app, the main window allows no frames; agent-made widgets
+ * move to the separate widgets webview and stay off until the isolation probe passes
+ * (architecture §5.3).
+ */
+export type WidgetSource = { srcdoc: string } | { off: string };
+
+export const AGENT_WIDGETS_OFF =
+  "Agent-made widgets are off in the app until the widget isolation check passes. They render in the browser preview.";
+
 export interface Platform {
   readonly runtime: Runtime;
   appInfo(): Promise<AppInfo>;
   /** Reports the first-paint wall-clock time (Unix epoch, ms) to the core for startup measurement. */
   reportFirstPaint(epochMs: number, source: PaintSource): Promise<void>;
+  /** Hands a widget's HTML to the host and says how to load it in a sandboxed iframe. */
+  widgetSource(id: string, version: number, html: string): Promise<WidgetSource>;
 }
-
-/** Shape returned by the Rust `app_info` command (src-tauri/src/lib.rs). */
-type NativeAppInfo = Omit<AppInfo, "runtime">;
 
 export const nativePlatform: Platform = {
   runtime: "native",
   async appInfo() {
-    const info = await invoke<NativeAppInfo>("app_info");
+    const info = await nativeAppInfo();
     return { ...info, runtime: "native" };
   },
   async reportFirstPaint(epochMs, source) {
-    await invoke("report_first_paint", { epochMs, source });
+    await nativeReportFirstPaint(epochMs, source);
+  },
+  widgetSource() {
+    return Promise.resolve({ off: AGENT_WIDGETS_OFF });
   },
 };
 
@@ -54,6 +68,9 @@ export const browserPlatform: Platform = {
   },
   reportFirstPaint() {
     return Promise.resolve();
+  },
+  widgetSource(_id, _version, html) {
+    return Promise.resolve({ srcdoc: html });
   },
 };
 

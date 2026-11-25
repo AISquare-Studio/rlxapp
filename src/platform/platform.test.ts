@@ -1,6 +1,6 @@
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import { afterEach, describe, expect, it } from "vitest";
-import { browserPlatform, detectPlatform, nativePlatform } from "./index.ts";
+import { AGENT_WIDGETS_OFF, browserPlatform, detectPlatform, nativePlatform } from "./index.ts";
 
 // The Tauri runtime sets `globalThis.isTauri`; mockIPC only fakes the IPC bridge.
 function enterTauri() {
@@ -69,5 +69,15 @@ describe("nativePlatform", () => {
     await nativePlatform.reportFirstPaint(1_700_000_000_123.5, "fcp");
 
     expect(received).toEqual({ epochMs: 1_700_000_000_123.5, source: "fcp" });
+  });
+});
+
+describe("widgetSource", () => {
+  it("keeps agent-made widgets off in the app, whose main window allows no frames", async () => {
+    await expect(nativePlatform.widgetSource("w", 1, "<p>hi</p>")).resolves.toEqual({ off: AGENT_WIDGETS_OFF });
+  });
+
+  it("renders them inline in the browser preview", async () => {
+    await expect(browserPlatform.widgetSource("w", 1, "<p>hi</p>")).resolves.toEqual({ srcdoc: "<p>hi</p>" });
   });
 });

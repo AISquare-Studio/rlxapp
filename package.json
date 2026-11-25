@@ -18,7 +18,9 @@
     "smoke": "node scripts/smoke-test.mjs",
     "icons": "node scripts/gen-icons.mjs",
     "e2e:build": "tauri build --debug --no-bundle --features e2e --config src-tauri/tauri.e2e.conf.json",
-    "e2e": "node e2e/native/run.mjs"
+    "e2e": "node e2e/native/run.mjs",
+    "e2e:web": "playwright test",
+    "gallery": "GALLERY=1 playwright test e2e/gallery.spec.ts"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.12.5",
@@ -26,6 +28,7 @@
     "react-dom": "^19.3.1"
   },
   "devDependencies": {
+    "@playwright/test": "^1.65.1",
     "@tauri-apps/cli": "^2.12.6",
     "@testing-library/dom": "^10.4.2",
     "@testing-library/react": "^16.3.3",

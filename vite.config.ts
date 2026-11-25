@@ -28,7 +28,7 @@ export default defineConfig({
     environment: "jsdom",
     setupFiles: ["./src/test/setup.ts"],
     include: ["src/**/*.test.{ts,tsx}", "scripts/**/*.test.mjs", "e2e/native/**/*.test.mjs"],
-    // Vitest stubs CSS imports by default; the theme test reads tokens.css with `?raw`.
-    css: { include: [/src\/theme\/tokens\.css/] },
+    // Vitest stubs CSS imports by default; the theme and repo tests read these files with `?raw`.
+    css: { include: [/src\/theme\/tokens\.css/, /src\/App\.css/] },
   },
 });

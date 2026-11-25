@@ -24,7 +24,7 @@ e2e = []
 
 [dependencies]
 # `unstable` provides Window::add_child, for the widgets child webview (docs/architecture.md §5.3).
-tauri = { version = "2", features = ["unstable"] }
+tauri = { version = "2", features = ["unstable", "tray-icon", "image-png"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 

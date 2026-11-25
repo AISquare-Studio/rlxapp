@@ -15,7 +15,8 @@
 // src/brand/brand.test.tsx checks that every generated SVG carries the logo's paths
 // unchanged.
 import { spawnSync } from "node:child_process";
-import { readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -79,3 +80,43 @@ for (const entry of readdirSync(iconsDir)) {
   if (unshipped.test(entry)) rmSync(join(iconsDir, entry), { recursive: true, force: true });
 }
 console.log("pruned mobile and Windows Store icons");
+
+// 4. The menu-bar / system-tray icon: the same paths, single colour, on a transparent square.
+//    tray.svg is black, used as a macOS template image (it follows light and dark menu bars).
+//    tray-light.svg is white and tray-dark.svg black, for dark and light trays on Windows/Linux.
+//    Each is rasterised to a 64 px PNG beside it. src/brand/brand.test.tsx checks the paths.
+function traySvg(fill, comment) {
+  const size = 64;
+  const width = 0.94 * size;
+  const scale = width / markW;
+  const x = (size - width) / 2;
+  const y = (size - markH * scale) / 2;
+  return [
+    `<!-- ${comment} The r\\x mark's paths, copied verbatim from src/assets/rlx-logo.svg. -->`,
+    `<svg xmlns="http://www.w3.org/2000/svg" width="${size}" height="${size}" viewBox="0 0 ${size} ${size}">`,
+    `  <g transform="translate(${x.toFixed(3)} ${y.toFixed(3)}) scale(${scale.toFixed(6)})" fill="${fill}">`,
+    ...paths.map((d) => `    <path d="${d}"/>`),
+    "  </g>",
+    "</svg>",
+    "",
+  ].join("\n");
+}
+
+const trays = [
+  ["tray", "#000000", "rlx tray icon, macOS template (black, alpha only)."],
+  ["tray-light", "#FFFFFF", "rlx tray icon for dark trays (white)."],
+  ["tray-dark", "#000000", "rlx tray icon for light trays (black)."],
+];
+for (const [name, fill, comment] of trays) {
+  const svgFile = join(iconsDir, `${name}.svg`);
+  writeFileSync(svgFile, traySvg(fill, comment));
+  const out = mkdtempSync(join(tmpdir(), "rlx-tray-"));
+  const raster = spawnSync(process.execPath, [tauriCli, "icon", svgFile, "--output", out, "--png", "64"], {
+    cwd: root,
+    stdio: "inherit",
+  });
+  if (raster.status !== 0) process.exit(raster.status ?? 1);
+  copyFileSync(join(out, "64x64.png"), join(iconsDir, `${name}.png`));
+  rmSync(out, { recursive: true, force: true });
+  console.log(`wrote ${svgFile} and ${name}.png`);
+}
