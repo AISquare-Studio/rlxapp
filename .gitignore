@@ -33,3 +33,7 @@ pnpm-debug.log*
 !.vscode/extensions.json
 !.vscode/launch.json
 !.vscode/tasks.json
+
+# TypeScript / test output
+*.tsbuildinfo
+coverage/

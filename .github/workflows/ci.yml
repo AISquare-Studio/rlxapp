@@ -1,0 +1,126 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: macOS
+            os: macos-latest
+            binary: src-tauri/target/release/bundle/macos/rlxapp.app/Contents/MacOS/rlxapp
+          - name: Windows
+            os: windows-latest
+            binary: src-tauri/target/release/rlxapp.exe
+          - name: Linux
+            os: ubuntu-24.04
+            binary: src-tauri/target/release/rlxapp
+    defaults:
+      run:
+        shell: bash
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install Linux system dependencies (WebKitGTK 4.1, xvfb)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential file libssl-dev libxdo-dev \
+            libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev \
+            xvfb
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - name: Install Rust (version pinned in rust-toolchain.toml)
+        run: |
+          rustup toolchain install
+          rustc --version
+          cargo --version
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri -> target
+
+      - name: Install npm dependencies
+        run: npm ci
+
+      - name: Lint (web)
+        run: npm run lint
+
+      - name: Typecheck (web)
+        run: npm run typecheck
+
+      - name: Test (web)
+        run: npm test
+
+      - name: Format check (Rust)
+        working-directory: src-tauri
+        run: cargo fmt --check
+
+      - name: Clippy (Rust)
+        working-directory: src-tauri
+        run: cargo clippy --locked --all-targets -- -D warnings
+
+      - name: Test (Rust)
+        working-directory: src-tauri
+        run: cargo test --locked
+
+      - name: Build app (unsigned)
+        run: npm run tauri build
+
+      - name: Smoke test (xvfb)
+        if: runner.os == 'Linux'
+        run: xvfb-run --auto-servernum node scripts/smoke-test.mjs "${{ matrix.binary }}"
+
+      - name: Smoke test
+        if: runner.os != 'Linux'
+        run: node scripts/smoke-test.mjs "${{ matrix.binary }}"
+
+      - name: Measure budgets (informational)
+        if: runner.os == 'macOS'
+        run: |
+          scripts/measure-budgets.sh --runs 3 | tee budgets.txt
+          {
+            echo '### Budgets (virtualized macOS CI runner; numbers are noisy, local Apple-silicon runs are the reference)'
+            echo '```'
+            cat budgets.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload installers
+        uses: actions/upload-artifact@v7
+        with:
+          name: rlxapp-${{ runner.os }}-${{ runner.arch }}
+          path: |
+            src-tauri/target/release/bundle/dmg/*.dmg
+            src-tauri/target/release/bundle/nsis/*.exe
+            src-tauri/target/release/bundle/msi/*.msi
+            src-tauri/target/release/bundle/deb/*.deb
+            src-tauri/target/release/bundle/rpm/*.rpm
+            src-tauri/target/release/bundle/appimage/*.AppImage
+          if-no-files-found: error
+          retention-days: 14

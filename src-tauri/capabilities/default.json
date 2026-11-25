@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Permissions for the main window. App commands (app_info, report_first_paint) are allowed by default; plugins must be added here explicitly.",
+  "windows": ["main"],
+  "permissions": ["core:default"]
+}

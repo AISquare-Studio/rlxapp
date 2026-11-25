@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <!-- Placeholder app icon; regenerate the platform icons with `npm run tauri icon src-tauri/icons/source.svg`. -->
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#3a3d5c"/>
+      <stop offset="1" stop-color="#1f2033"/>
+    </linearGradient>
+  </defs>
+  <rect x="100" y="100" width="824" height="824" rx="185" fill="url(#bg)"/>
+  <path d="M330 370l180 142-180 142" fill="none" stroke="#f5f5f7" stroke-width="84" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M560 690h150" stroke="#8ecae6" stroke-width="84" stroke-linecap="round"/>
+</svg>
