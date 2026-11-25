@@ -28,8 +28,10 @@ env:
 #             - an unsigned `tauri build` of that OS's installers;
 #             - a smoke test of the built binary (under xvfb on Linux): it must paint
 #               its first frame and stay up for 5 s;
-#             - the installer sizes;
-#             - on macOS, scripts/measure-budgets.sh.
+#             - idle memory: on Windows and Linux, scripts/idle-memory.mjs (private
+#               working set and PSS); on macOS, scripts/measure-budgets.sh
+#               (phys_footprint, plus installer size and cold start);
+#             - the installer sizes.
 #           The jobs then upload the installers as run artifacts.
 #   ci-ok   passes only when every app job did: the one check for branch protection
 #           to require, however many legs there are.
@@ -140,6 +142,14 @@ jobs:
       - name: Smoke test
         if: runner.os != 'Linux' && hashFiles('src-tauri/Cargo.toml') != ''
         run: node scripts/smoke-test.mjs "${{ matrix.binary }}"
+
+      - name: Idle memory (xvfb, informational)
+        if: runner.os == 'Linux' && hashFiles('src-tauri/Cargo.toml') != ''
+        run: xvfb-run --auto-servernum node scripts/idle-memory.mjs "${{ matrix.binary }}"
+
+      - name: Idle memory (informational)
+        if: runner.os == 'Windows' && hashFiles('src-tauri/Cargo.toml') != ''
+        run: node scripts/idle-memory.mjs "${{ matrix.binary }}"
 
       - name: Installer sizes
         if: hashFiles('src-tauri/Cargo.toml') != ''
