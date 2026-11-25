@@ -159,8 +159,15 @@ describe("isolation probe rules", () => {
     report.switch.builtinRegister = "refused: this OS has no widget webview in v0";
     report.switch.probeAttach = "attached for the probe only";
     expect(failing(evaluate(report))).toEqual([]);
-    report.listeners.iframe.hits = ["1 tcp GET /widget-iframe/navigate HTTP/1.1"];
-    expect(failing(evaluate(report))[0]).toMatch(/widget iframe: 0 connections/);
+    // A leak on a probe-only webview keeps Windows widgets off but doesn't fail the run...
+    report.listeners.host.hits = ["1 tcp GET /widgets-host/navigate HTTP/1.1"];
+    const gated = evaluate(report);
+    expect(failing(gated)[0]).toMatch(/host page: 0 connections/);
+    expect(passed(gated)).toBe(true);
+    expect(agentVerdict(gated).mayTurnOn).toBe(false);
+    // ...while the IPC rules stay hard there.
+    report.canary.push({ from: "widget-iframe-raw-chrome", webview: "widgets" });
+    expect(passed(evaluate(report))).toBe(false);
   });
 
   it("fails when a mount is reported before it happened, or a reload loses the grid", () => {

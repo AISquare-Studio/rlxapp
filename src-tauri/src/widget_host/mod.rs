@@ -665,7 +665,12 @@ fn add_widgets_webview<R: Runtime>(
     use tauri::Manager;
     let url = Url::parse(&format!("{SCHEME}://localhost/host/")).expect("static URL parses");
     let builder = WebviewBuilder::new(LABEL, WebviewUrl::CustomProtocol(url))
-        .on_navigation(allow_navigation)
+        .on_navigation(|url| {
+            let allowed = allow_navigation(url);
+            #[cfg(feature = "e2e")]
+            crate::e2e::record_navigation(url.as_str(), allowed);
+            allowed
+        })
         .on_new_window(|_, _| tauri::webview::NewWindowResponse::Deny)
         .initialization_script_for_all_frames(FRAMES_JS)
         // Every page load of the host page: replay the grid and the data ([`state`]).

@@ -7,6 +7,13 @@
 import { spawn } from "node:child_process";
 
 const ELEMENT = "element-6066-11e4-a23d-4a4d4fd4a3d1";
+
+/** An element reference's id: the W3C key, or the legacy JSON Wire `ELEMENT` some drivers use. */
+function elementId(element) {
+  const id = element?.[ELEMENT] ?? element?.ELEMENT ?? (element && Object.values(element)[0]);
+  if (typeof id !== "string") throw new Error(`not an element reference: ${JSON.stringify(element)}`);
+  return id;
+}
 const sleep = (ms) => new Promise((done) => setTimeout(done, ms));
 
 async function request(base, method, path, body) {
@@ -129,7 +136,7 @@ export class Session {
 
   /** A PNG of one element. */
   async elementScreenshot(element) {
-    return Buffer.from(await this.#call("GET", `/element/${element[ELEMENT]}/screenshot`), "base64");
+    return Buffer.from(await this.#call("GET", `/element/${elementId(element)}/screenshot`), "base64");
   }
 
   async delete() {

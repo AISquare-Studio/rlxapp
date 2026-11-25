@@ -108,10 +108,13 @@ function evaluateChecks(report, stderr) {
     const contract = hits.filter((h) => h.vector !== "preconnect");
     const silent = hits.filter((h) => h.vector === "preconnect");
     const label = side === "host" ? "host page" : "widget iframe";
-    check(
+    // On a webview only the probe attached (the product attaches none on this OS), a leak
+    // can't reach a user: it keeps the widget webview and agent-made widgets off here.
+    (policy.widgetWebview ? check : gate)(
       `${label}: 0 connections (fetch, XHR, WebSocket, EventSource, beacon, img, prefetch, WebRTC, navigation)`,
       contract.length === 0,
-      contract.length === 0 ? "0 connections, 0 datagrams" : summarizeHits(contract),
+      (contract.length === 0 ? "0 connections, 0 datagrams" : summarizeHits(contract)) +
+        (policy.widgetWebview ? "" : " (probe-only webview: the product attaches none on this OS)"),
     );
     gate(
       `${label}: 0 preconnect/dns-prefetch connections`,
@@ -228,6 +231,12 @@ function evaluateChecks(report, stderr) {
     info("widget iframe: connection attempts", (frame.connections ?? []).map((c) => `${c.kind} ${c.outcome}`).join("; "));
   }
 
+  const navigations = report.navigations ?? [];
+  info(
+    "navigations the guard was asked about",
+    navigations.length === 0 ? "none" : navigations.map((n) => `${n.allowed ? "allowed" : "denied"} ${n.url}`).join("; "),
+  );
+
   const dropped = droppedRawMessages(stderr);
   info("raw messages Tauri dropped for the key", dropped.length === 0 ? "none reached Tauri" : dropped.join(", "));
 
@@ -267,7 +276,7 @@ function evaluateChecks(report, stderr) {
   );
 
   const after = report.hostAfterNavigation;
-  check(
+  (policy.widgetWebview ? check : gate)(
     "self-navigation off the widget scheme blocked",
     after && typeof after.href === "string" && after.href === host.href && after.frames === report.framesBeforeNavigation,
     after ? `host still at ${after.href}, ${after.frames} frames` : "host page gone after navigating",

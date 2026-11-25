@@ -42,7 +42,9 @@ if (!values.only || values.only === "screens") {
     console.log("screens: macOS has no WebDriver for WKWebView; run scripts/mac-native-check.sh for the native checks.");
   } else {
     try {
-      failed ||= !(await runScreens());
+      // Always run the screens, even after a probe failure (`||=` would skip them).
+      const screensOk = await runScreens();
+      failed = failed || !screensOk;
     } catch (error) {
       console.error(`FAIL  screens: ${error.message ?? error}`);
       failed = true;
