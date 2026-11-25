@@ -13,13 +13,14 @@
 // Set TAURI_NATIVE_DRIVER to the native driver's path (msedgedriver.exe on Windows) if it
 // isn't on PATH. On Linux, run it under xvfb-run.
 import assert from "node:assert/strict";
-import { mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { spawn } from "node:child_process";
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
 import { runProbe } from "./probe.mjs";
 import { defaultBinary, osName, repoRoot, screenshotsDir } from "./paths.mjs";
-import { waitForWebviewsToExit, webviewProcesses } from "./processes.mjs";
+import { stopTree, waitForWebviewsToExit, webviewProcesses } from "./processes.mjs";
 import { Session, startTauriDriver } from "./webdriver.mjs";
 
 const { values } = parseArgs({
@@ -54,6 +55,40 @@ if (!values.only || values.only === "screens") {
 }
 process.exit(failed ? 1 : 0);
 
+/**
+ * Windows: msedgedriver's own launch of a WebView2 app waits for a DevToolsActivePort file
+ * in the user-data folder it asked for. The app's WebView2 uses its own folder, so the
+ * session times out. Microsoft's documented alternative: start the app with a remote
+ * debugging port and attach msedgedriver to it (ms:edgeOptions.debuggerAddress).
+ */
+async function launchForAttach(app, env, port) {
+  const child = spawn(app, [], {
+    env: { ...env, WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS: `--remote-debugging-port=${port}` },
+    stdio: "ignore",
+  });
+  let exited = false;
+  child.on("exit", () => (exited = true));
+  const deadline = Date.now() + 45_000;
+  for (;;) {
+    try {
+      const response = await fetch(`http://127.0.0.1:${port}/json/version`);
+      if (response.ok) break;
+    } catch {
+      // not up yet
+    }
+    if (exited || Date.now() > deadline) {
+      await stopTree(child, () => exited);
+      const portFile = join(process.env.LOCALAPPDATA ?? "", "studio.aisquare.rlx", "EBWebView", "DevToolsActivePort");
+      throw new Error(
+        `WebView2 never opened remote debugging on port ${port}${exited ? " (the app exited)" : ""}; ` +
+          `the app's own DevToolsActivePort ${existsSync(portFile) ? "exists" : "doesn't exist"}`,
+      );
+    }
+    await new Promise((done) => setTimeout(done, 250));
+  }
+  return { port, stop: () => stopTree(child, () => exited) };
+}
+
 /** The r\x mark's path data, read from the logo the app renders it from. */
 function logoPaths() {
   const svg = readFileSync(join(repoRoot, "src", "assets", "rlx-logo.svg"), "utf8");
@@ -78,10 +113,19 @@ async function runScreens() {
       const label = check.name ?? file.replace(/\.mjs$/, "");
       const saved = [];
       let session;
+      let attached = null;
       const started = Date.now();
       try {
         // A fresh app per check, so one check's state never leaks into the next.
-        session = await Session.create(driver.base, binary);
+        if (os === "windows") {
+          attached = await launchForAttach(binary, env, 9222 + results.length);
+          session = await Session.withCapabilities(driver.base, {
+            browserName: "webview2",
+            "ms:edgeOptions": { debuggerAddress: `127.0.0.1:${attached.port}` },
+          });
+        } else {
+          session = await Session.create(driver.base, binary);
+        }
         const save = (png, shotName) => {
           const path = join(screenshotsDir, `${os}-${label}--${shotName}.png`);
           writeFileSync(path, png);
@@ -111,6 +155,7 @@ async function runScreens() {
         results.push({ label, ok: false, detail: `${String(error.message ?? error)}${note}`, ms: Date.now() - started });
       } finally {
         await session?.delete();
+        await attached?.stop();
       }
     }
   } finally {

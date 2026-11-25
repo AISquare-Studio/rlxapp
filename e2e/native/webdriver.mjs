@@ -70,9 +70,12 @@ export async function startTauriDriver({ port = 4444, nativeDriver, env = proces
 export class Session {
   /** Opens a session that launches `application` (the built binary) under tauri-driver. */
   static async create(base, application) {
-    const value = await request(base, "POST", "/session", {
-      capabilities: { alwaysMatch: { "tauri:options": { application } } },
-    });
+    return Session.withCapabilities(base, { "tauri:options": { application } });
+  }
+
+  /** Opens a session with raw capabilities (tauri-driver forwards them unchanged). */
+  static async withCapabilities(base, alwaysMatch) {
+    const value = await request(base, "POST", "/session", { capabilities: { alwaysMatch } });
     return new Session(base, value.sessionId);
   }
 

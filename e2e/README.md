@@ -20,6 +20,8 @@ xvfb-run --auto-servernum npm run e2e   # Linux without a display
 
 The screen checks need `tauri-driver` on PATH (`cargo install tauri-driver --locked`). On Windows they also need an msedgedriver that matches the WebView2 runtime: put it on PATH or set `TAURI_NATIVE_DRIVER`. CI installs both.
 
+On Windows, the runner starts the app itself with `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=--remote-debugging-port=<port>`, and attaches msedgedriver to it through tauri-driver (`ms:edgeOptions.debuggerAddress`). This is Microsoft's documented way to automate a running WebView2 app. msedgedriver's own launch waits for a DevToolsActivePort file in a user-data folder that the app's WebView2 doesn't use, so it times out.
+
 Output:
 - `e2e/screenshots/<os>-<check>--<shot>.png`, from the screen checks and `scripts/mac-native-check.sh`;
 - `e2e/results/isolation-probe-<os>.{json,md}`.
