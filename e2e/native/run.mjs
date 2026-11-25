@@ -64,10 +64,18 @@ process.exit(failed ? 1 : 0);
 async function launchForAttach(app, env, port) {
   const child = spawn(app, [], {
     env: { ...env, WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS: `--remote-debugging-port=${port}` },
-    stdio: "ignore",
+    stdio: ["ignore", "pipe", "pipe"],
   });
   let exited = false;
-  child.on("exit", () => (exited = true));
+  let exitCode = null;
+  let output = "";
+  const keep = (chunk) => (output = (output + chunk).slice(-1500));
+  child.stdout.setEncoding("utf8").on("data", keep);
+  child.stderr.setEncoding("utf8").on("data", keep);
+  child.on("exit", (code, signal) => {
+    exited = true;
+    exitCode = signal ?? code;
+  });
   const deadline = Date.now() + 45_000;
   for (;;) {
     try {
@@ -80,8 +88,9 @@ async function launchForAttach(app, env, port) {
       await stopTree(child, () => exited);
       const portFile = join(process.env.LOCALAPPDATA ?? "", "studio.aisquare.rlx", "EBWebView", "DevToolsActivePort");
       throw new Error(
-        `WebView2 never opened remote debugging on port ${port}${exited ? " (the app exited)" : ""}; ` +
-          `the app's own DevToolsActivePort ${existsSync(portFile) ? "exists" : "doesn't exist"}`,
+        `WebView2 never opened remote debugging on port ${port}${exited ? ` (the app exited: ${exitCode})` : ""}; ` +
+          `the app's own DevToolsActivePort ${existsSync(portFile) ? "exists" : "doesn't exist"}; ` +
+          `app output: ${output.trim().replaceAll(/\s+/g, " ") || "none"}`,
       );
     }
     await new Promise((done) => setTimeout(done, 250));
