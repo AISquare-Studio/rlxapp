@@ -10,7 +10,7 @@ These test the built app, not the web UI on Vite. Two parts:
   - The per-OS agent-widget switch must be honoured.
 
   A *gate* check (⛔) decides whether agent-made widgets may be turned on for that OS. Preconnect is one today, because WebKit ignores CSP for it. A gate failure fails the run when agent-made widgets are on for that OS, or with `RLX_PROBE_STRICT=1`.
-- **Screen checks** run on Windows and Linux: the built app under [tauri-driver](https://v2.tauri.app/develop/tests/webdriver/), with msedgedriver for WebView2 and WebKitWebDriver for WebKitGTK. macOS has no WebDriver for WKWebView, so `scripts/mac-native-check.sh` covers the window, menu and tray there.
+- **Screen checks** run on Windows and Linux: the built app under [tauri-driver](https://v2.tauri.app/develop/tests/webdriver/), with msedgedriver for WebView2 and WebKitWebDriver for WebKitGTK. macOS has no WebDriver for WKWebView, so `scripts/mac-native-check.sh` covers the window, second launch, menu, close, reopen and quit there (and asserts the app has no tray or login item: the tray belongs to the rlx service).
 
 ```sh
 npm run e2e:build      # tauri build --debug --no-bundle --features e2e

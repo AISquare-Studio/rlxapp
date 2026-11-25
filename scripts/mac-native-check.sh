@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# macOS native checks of the built rlx app: window, app menu, close-to-tray and quit.
+# macOS native checks of the built rlx app: window, second launch, app menu, no tray or
+# login item, close, reopen and quit.
 #
 #   scripts/mac-native-check.sh [--no-build] [--install] [--no-probe] [--skip CHECK]...
 #
@@ -10,17 +11,22 @@
 # What it does:
 #   1. builds the app: `npm run tauri build -- --bundles app` (skip with --no-build). With
 #      --install it then copies rlx.app to /Applications/rlx.app, replacing it.
-#   2. launches it, finds the main window's id (CGWindowList, by the app's pid) and shoots it;
-#   3. opens the app menu with osascript and shoots the menu's own window;
-#   4. closes the main window, then checks that the process is still alive and that its
-#      menu-bar item (tray) exists. The menu-bar item is shot by its own window id; if macOS
-#      doesn't give it one, its existence is asserted through System Events instead;
-#   5. quits through the app menu (rlx → Quit rlx) and checks that the process exits;
-#   6. runs the widget isolation probe on a test build (`npm run e2e:build`, then
+#   2. launches it with `open` (LaunchServices), finds the main window's id (CGWindowList, by
+#      the app's pid), checks its title and shoots it;
+#   3. launches it again: the existing process must take it and show its window, with no
+#      second process;
+#   4. opens the app menu with osascript and shoots the menu's own window;
+#   5. checks the app has no menu-bar (tray) item and no login item. The tray belongs to the
+#      rlx service, not the app;
+#   6. closes the main window: the process stays up with no window on screen. Then reopens it
+#      with `open` (as a Dock click does): the window comes back;
+#   7. quits through the app menu (rlx → Quit rlx) and checks that the process exits;
+#   8. runs the widget isolation probe on a test build (`npm run e2e:build`, then
 #      e2e/native/probe.mjs). Skip it with --no-probe.
 #
-# Checks: window, menu, close-to-tray, tray, quit, probe. `--skip CHECK` turns one into
-# a SKIP line, e.g. --skip tray while the build has no tray yet. Any FAIL exits non-zero.
+# Checks: window, second-launch, menu, no-tray, no-login-item, close, reopen, quit, probe.
+# `--skip CHECK` turns one into a SKIP line, for a build that lacks a behaviour so far. Any
+# FAIL exits non-zero.
 #
 # Screenshots: e2e/screenshots/macos-native--<shot>.png. scripts/screenshot-gallery.sh turns them into a
 # PR gallery.
@@ -124,9 +130,21 @@ fi
 mkdir -p "$SHOTS"
 
 # --- 2. Launch and shoot the main window ----------------------------------------------
-"$APP_BUNDLE/Contents/MacOS/rlxapp" >/dev/null 2>&1 &
-APP_PID=$!
-cleanup() { kill "$APP_PID" 2>/dev/null || true; }
+EXE="$APP_BUNDLE/Contents/MacOS/rlxapp"
+app_pids() { pgrep -f "^$EXE" || true; }
+if [[ -n "$(app_pids)" ]]; then
+  echo "mac-native-check: rlx from $APP_BUNDLE is already running; quit it first." >&2
+  exit 2
+fi
+open "$APP_BUNDLE"
+APP_PID=""
+for _ in $(seq 1 40); do
+  APP_PID=$(app_pids | head -1)
+  [[ -n "$APP_PID" ]] && break
+  sleep 0.25
+done
+[[ -n "$APP_PID" ]] || { echo "mac-native-check: rlx didn't start" >&2; exit 1; }
+cleanup() { for pid in $(app_pids); do kill "$pid" 2>/dev/null || true; done; }
 trap cleanup EXIT
 SE_PROCESS="first process whose unix id is $APP_PID"
 
@@ -139,6 +157,16 @@ window_id() {
     ws.sort((a, b) => b.width * b.height - a.width * a.height);
     console.log(ws.length ? ws[0].id : "");' "$1"
 }
+wait_window() { # wait_window <seconds>: the main window's id once it is on screen
+  local id=""
+  for _ in $(seq 1 $(( $1 * 4 ))); do
+    id=$(window_id '== 0')
+    [[ -n "$id" ]] && break
+    kill -0 "$APP_PID" 2>/dev/null || break
+    sleep 0.25
+  done
+  echo "$id"
+}
 shoot() { # shoot <window id> <name>
   local file="$SHOTS/macos-native--$2.png"
   if with_timeout 15 screencapture -l "$1" -o -x "$file" && [[ -s "$file" ]]; then
@@ -148,18 +176,13 @@ shoot() { # shoot <window id> <name>
     return 1
   fi
 }
+se() { with_timeout 10 osascript -e "tell application \"System Events\" to $1" 2>/dev/null; }
 
-main_id=""
-for _ in $(seq 1 60); do
-  main_id=$(window_id '== 0')
-  [[ -n "$main_id" ]] && break
-  kill -0 "$APP_PID" 2>/dev/null || break
-  sleep 0.5
-done
+main_id=$(wait_window 30)
 layer0=$(windows | node -e 'const ws = JSON.parse(require("fs").readFileSync(0, "utf8")).filter((w) => w.layer === 0); console.log(ws.map((w) => `${w.id} ${w.width}x${w.height}${w.onScreen ? "" : " (off screen)"}`).join(", "))')
 info "the app's layer-0 windows: $layer0"
 if ! skipped window; then
-  title=$(with_timeout 10 osascript -e "tell application \"System Events\" to get name of window 1 of ($SE_PROCESS)" 2>/dev/null || true)
+  title=$(se "get name of window 1 of ($SE_PROCESS)" || true)
   if [[ -z "$main_id" ]]; then
     fail window "no on-screen window for pid $APP_PID"
   elif [[ "$title" != rlx ]]; then
@@ -169,9 +192,24 @@ if ! skipped window; then
   fi
 fi
 
-# --- 3. The app menu ---------------------------------------------------------------------
+# --- 3. A second launch goes to the running app -----------------------------------------
+if ! skipped second-launch; then
+  open "$APP_BUNDLE"
+  sleep 2
+  count=$(app_pids | wc -l | tr -d ' ')
+  front=$(se "get frontmost of ($SE_PROCESS)" || true)
+  if [[ "$count" != 1 ]]; then
+    fail second-launch "$count rlx processes after a second launch"
+  elif [[ -z "$(window_id '== 0')" || "$front" != true ]]; then
+    fail second-launch "the running app didn't come forward with its window (frontmost: ${front:-unknown})"
+  else
+    pass second-launch "one process; its window is on screen and frontmost"
+  fi
+fi
+
+# --- 4. The app menu ---------------------------------------------------------------------
 if ! skipped menu; then
-  with_timeout 10 osascript -e "tell application \"System Events\" to set frontmost of ($SE_PROCESS) to true" >/dev/null 2>&1 || true
+  se "set frontmost of ($SE_PROCESS) to true" >/dev/null || true
   sleep 0.5
   # Clicking a menu-bar item blocks osascript until the menu closes, so click in the
   # background, shoot the menu's window, then close it with Escape.
@@ -180,10 +218,10 @@ if ! skipped menu; then
   menu_id=""
   for _ in $(seq 1 20); do
     sleep 0.25
-    menu_id=$(window_id '> 0 && layer !== 25')
+    menu_id=$(window_id '> 0')
     [[ -n "$menu_id" ]] && break
   done
-  items=$(with_timeout 10 osascript -e "tell application \"System Events\" to tell ($SE_PROCESS) to get name of menu items of menu 1 of menu bar item 2 of menu bar 1" 2>/dev/null || true)
+  items=$(se "tell ($SE_PROCESS) to get name of menu items of menu 1 of menu bar item 2 of menu bar 1" || true)
   if [[ -z "$menu_id" ]]; then
     fail menu "the app menu didn't open (no menu window for pid $APP_PID)"
   elif [[ "$items" != *"Quit rlx"* ]]; then
@@ -196,36 +234,59 @@ if ! skipped menu; then
   wait "$clicker" 2>/dev/null || true
 fi
 
-# --- 4. Close the window: still running, in the menu bar ------------------------------
-close_script="tell application \"System Events\" to tell ($SE_PROCESS) to click (first button of window 1 whose subrole is \"AXCloseButton\")"
-if ! skipped close-to-tray; then
-  with_timeout 10 osascript -e "$close_script" >/dev/null 2>&1 || true
-  sleep 2
-  if ! kill -0 "$APP_PID" 2>/dev/null; then
-    fail close-to-tray "closing the window quit the app"
-  elif [[ -n "$(window_id '== 0')" ]]; then
-    fail close-to-tray "the main window is still on screen after Close"
+# --- 5. No tray item, no login item ------------------------------------------------------
+# The tray belongs to the rlx service (rlxd), not the app.
+if ! skipped no-tray; then
+  status_id=$(window_id '== 25')
+  extras=$(se "tell ($SE_PROCESS) to count menu bar items of menu bar 2" || echo 0)
+  if [[ -n "$status_id" || "${extras:-0}" -gt 0 ]]; then
+    if [[ -n "$status_id" ]]; then shoot "$status_id" unexpected-menu-bar-item || true; fi
+    fail no-tray "the app put an item in the menu bar (window ${status_id:-none}, $extras through System Events)"
   else
-    pass close-to-tray "process $APP_PID alive with no window on screen"
+    pass no-tray "no status-item window and no menu-bar extra"
   fi
 fi
-if ! skipped tray; then
-  tray_id=$(window_id '== 25')
-  extras=$(with_timeout 10 osascript -e "tell application \"System Events\" to tell ($SE_PROCESS) to count menu bar items of menu bar 2" 2>/dev/null || echo 0)
-  if [[ -n "$tray_id" ]] && shoot "$tray_id" menu-bar-item; then
-    pass tray "menu-bar item window $tray_id ($extras item(s) in System Events)"
-  elif [[ "${extras:-0}" -ge 1 ]]; then
-    pass tray "$extras menu-bar item(s) through System Events (no window of its own to shoot)"
+if ! skipped no-login-item; then
+  login_items=$(se "get the name of every login item" || true)
+  agents=$(ls "$HOME/Library/LaunchAgents" 2>/dev/null | grep -i 'studio\.aisquare\.rlx' || true)
+  if [[ ",${login_items// /}," == *",rlx,"* || -n "$agents" ]]; then
+    fail no-login-item "found a login item (${login_items:-none}) or launch agent (${agents:-none})"
   else
-    fail tray "no menu-bar item for pid $APP_PID"
+    pass no-login-item "no rlx login item and no studio.aisquare.rlx launch agent"
   fi
 fi
 
-# --- 5. Quit through the app menu ------------------------------------------------------
+# --- 6. Close the window, then reopen it ------------------------------------------------
+if ! skipped close; then
+  se "tell ($SE_PROCESS) to click (first button of window 1 whose subrole is \"AXCloseButton\")" >/dev/null || true
+  sleep 2
+  if ! kill -0 "$APP_PID" 2>/dev/null; then
+    fail close "closing the window quit the app"
+  elif [[ -n "$(window_id '== 0')" ]]; then
+    fail close "the main window is still on screen after Close"
+  else
+    pass close "process $APP_PID up with no window on screen"
+  fi
+fi
+if ! skipped reopen; then
+  if kill -0 "$APP_PID" 2>/dev/null; then
+    open "$APP_BUNDLE"
+    reopened=$(wait_window 10)
+    if [[ -n "$reopened" && "$(app_pids | wc -l | tr -d ' ')" == 1 ]]; then
+      pass reopen "window $reopened back on screen, same process"
+    else
+      fail reopen "no window after reopening the running app"
+    fi
+  else
+    fail reopen "the app was gone before Reopen"
+  fi
+fi
+
+# --- 7. Quit through the app menu ------------------------------------------------------
 if ! skipped quit; then
   if kill -0 "$APP_PID" 2>/dev/null; then
-    with_timeout 10 osascript -e "tell application \"System Events\" to set frontmost of ($SE_PROCESS) to true" >/dev/null 2>&1 || true
-    with_timeout 10 osascript -e "tell application \"System Events\" to tell ($SE_PROCESS) to click menu item \"Quit rlx\" of menu 1 of menu bar item 2 of menu bar 1" >/dev/null 2>&1 || true
+    se "set frontmost of ($SE_PROCESS) to true" >/dev/null || true
+    se "tell ($SE_PROCESS) to click menu item \"Quit rlx\" of menu 1 of menu bar item 2 of menu bar 1" >/dev/null || true
     for _ in $(seq 1 40); do kill -0 "$APP_PID" 2>/dev/null || break; sleep 0.25; done
     if kill -0 "$APP_PID" 2>/dev/null; then
       fail quit "rlx → Quit rlx didn't end the process"
@@ -238,7 +299,7 @@ if ! skipped quit; then
 fi
 cleanup
 
-# --- 6. The widget isolation probe ----------------------------------------------------
+# --- 8. The widget isolation probe ----------------------------------------------------
 if [[ $probe -eq 1 ]] && ! skipped probe; then
   npm run e2e:build
   if node e2e/native/probe.mjs; then

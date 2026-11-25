@@ -8,7 +8,7 @@
 // 2. The screen checks in checks/ (one file per screen), on Windows and Linux: the app runs
 //    under tauri-driver, and every check saves screenshots to e2e/screenshots/ as
 //    <os>-<check>--<shot>.png. macOS has no WebDriver for WKWebView, so there
-//    scripts/mac-native-check.sh covers the window, the menus and the tray instead.
+//    scripts/mac-native-check.sh covers the window, menus, close, reopen and quit instead.
 //
 // Set TAURI_NATIVE_DRIVER to the native driver's path (msedgedriver.exe on Windows) if it
 // isn't on PATH. On Linux, run it under xvfb-run.
