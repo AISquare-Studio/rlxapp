@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { contrast } from "./contrast.ts";
 import { CONTRAST_PAIRS, DEFAULT_THEME, RLX_THEME, THEMES, type ThemeTokens } from "./themes.ts";
-import tokensCss from "./tokens.css?raw";
+import tokensRaw from "./tokens.css?raw";
+
+// Normalise line endings: a Windows checkout may turn LF into CRLF.
+const tokensCss = tokensRaw.replace(/\r\n/g, "\n");
 
 describe("contrast", () => {
   it("follows the WCAG formula", () => {
