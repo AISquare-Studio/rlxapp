@@ -1,0 +1,10 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "rlxapp",
+  "bundle": {
+    "linux": {
+      "deb": { "desktopTemplate": "linux/rlx.desktop" },
+      "rpm": { "desktopTemplate": "linux/rlx.desktop" }
+    }
+  }
+}
