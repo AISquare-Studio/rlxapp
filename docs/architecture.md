@@ -65,7 +65,7 @@ flowchart TB
   RLXD -->|"every tool call, ask F"| GATE
 ```
 
-- **Process supervisor.** Starts, watches and restarts rlxd, and stops the app's rlx processes around upgrades (§11). rlxd owns run process trees and outlives the app: closing or crashing the app doesn't end runs.
+- **Process supervisor.** Starts, watches and restarts rlxd, and stops the app's rlx processes around upgrades (§11). rlxd owns run process trees and outlives the app, so a crash doesn't end runs. But the app is the gate (§8.1): while no app gate client is connected, every tool call is denied and no scheduled job fires (§6).
 - **Engine interface.** The only boundary to agentic work, all of which goes through rlx (§15); the core never spawns `claude`. `RlxEngine` talks to rlxd over a local socket through rlxd's client crate. That crate is compiled into the app while rlxd upgrades with rlx, so `hello()` exchanges protocol versions first; on a mismatch the engine reports `Incompatible` and the app offers an update instead of guessing.
 - **The gate is fixed when the engine is built** and keyed by run ID, so runs the app attaches to or resumes after a restart stay gated.
 
@@ -192,7 +192,8 @@ type DataJob = {
   prompt: string;              // template: {{settings.*}} {{state.cursor}} {{owner}}
   output: JSONSchema;          // validated again by the core
   every: { minutes: number } | { cron: string };
-  runWhen: "app-open" | "background";
+  runWhen: "app-open" | "background";   // window open, or app running in the tray; never with the app quit (§6)
+  catchUp: "once" | "skip";   // applied when the app reconnects after skipped fires (§6)
 };
 ```
 
@@ -212,7 +213,7 @@ type FromWidget = // widget → core
   | { type: "resize"; v: 1; h: number };
 ```
 
-Invalid data never reaches the widget (it keeps its last good data and shows `error`); widgets can't call tools, and undeclared actions are dropped. Widget state is widget-written, so the core validates it against `manifest.state` and inserts `{{state.*}}` into prompts quoted as data. `openUrl` is rate-limited and opened by the core in the system browser. The host can't tell whether the widget's user really clicked, so "only URLs in the current data" is the check.
+Invalid data never reaches the widget (it keeps its last good data and shows `error`); widgets can't call tools, and undeclared actions are dropped. Widget state is widget-written, so the core validates it against `manifest.state` and inserts `{{state.*}}` into prompts quoted as data. `openUrl` is rate-limited and opened by the core in the system browser; the host can't verify a click, so the check is "only URLs in the current data".
 
 ### 5.3 Rendering: sandboxed iframe, CSP, bridge, main window
 
@@ -239,7 +240,7 @@ Invalid data never reaches the widget (it keeps its last good data and shows `er
 
 ### 5.4 Agent-made widgets: create, store, update
 
-- **Create.** The owner asks ("a widget with my open PRs") or the agent suggests one. A tool-less `WidgetAuthor` run returns `{manifest, html}` via `--json-schema` (E2); it gets the SDK reference, the manifest schema and the connector's read tools, listed as text. The core checks the schema and that the job uses only read tools and fits the size limit. It also rejects external URLs, as hygiene rather than a control, since §5.3 is the control. Then it previews a dry-run refresh, and the owner clicks **Add**.
+- **Create.** The owner asks ("a widget with my open PRs") or the agent suggests one. A tool-less `WidgetAuthor` run returns `{manifest, html}` via `--json-schema` (E2); it gets the SDK reference, the manifest schema and the connector's read tools, listed as text. The core checks the schema and that the job uses only read tools and fits the size limit. It also rejects external URLs (hygiene; §5.3 is the control). Then it previews a dry-run refresh, and the owner clicks **Add**.
 - **Store.** `widgets/<id>/<version>/{manifest.json,index.html}` plus a SQLite registry row. Built-ins are read-only; **Customize** copies one.
 - **Update.** "Only show DMs" makes a new version: previewed, one-click apply, reversible; added tools show as a diff. After three validation failures in a row the widget offers **Fix with &lt;AgentName&gt;**.
 
@@ -292,8 +293,13 @@ stateDiagram-v2
   - runs still live are re-attached from the last stored `seq`;
   - Tasks rlxd reports dead are resumed (from the session ID, ask I), and refreshes rerun;
   - **a `SendExecutor` is never retried.** The core asks rlxd whether its tool call returned. Only if rlxd doesn't know does it go to needs-you ("this may have sent; check first").
-- **Background:** closing the window keeps the app in the menu bar or tray, with a badge and **Quit**; launch at login is opt-in.
-- **Job ownership once rlxd's scheduler ships.** The app owns job definitions: SQLite is the source of truth, and the core pushes them to rlxd idempotently by job ID. rlxd owns firing and run records, so jobs can run with the app quit (hub question 2), and the core mirrors results through `runs()` and `attach()`.
+- **Background:** closing the window keeps the app running in the menu bar or tray, with a badge and **Quit**, so its jobs keep firing; launch at login is opt-in. "App absent" therefore means the user quit it.
+- **Job ownership once rlxd's scheduler ships.** The app owns job definitions: SQLite is the source of truth, and the core pushes them to rlxd idempotently by job ID. rlxd owns firing and run records, and the core mirrors results through `runs()` and `attach()`.
+- **Jobs fire only while the app is connected.** App-owned scheduled jobs fire only while an app gate client is connected to rlxd. With no app, rlxd records `job.skipped {reason: app_absent}` instead of firing, and applies the job's `catch_up` policy when the app reconnects:
+  - `once` fires the job once;
+  - `skip` waits for the next scheduled time.
+
+  rlxd never fires a run that would be denied wholesale. The gate still sees every call, reads included, and fails closed; writes always need the live app (§8.1).
 
 ## 7. Personal agent and sign-off
 
@@ -327,7 +333,7 @@ Both are required. The gate allows only what the run's policy allows and denies 
 - reads and Drafts for a Task;
 - nothing for `Check`, `ParseInstruction` and `WidgetAuthor`.
 
-An unreachable gate means deny. A test asserts that a tool-less run's connector call is denied.
+**The gate fails closed.** It sees every call, reads included. A call with no app gate client connected, or with no answer in time, is denied, so writes always need the live app. For the same reason scheduled jobs fire only while the app is connected (§6). A test asserts that a tool-less run's connector call is denied.
 
 **One path: every send becomes a Draft,** an Inbox object holding the connector, tool, exact tool input (`payload`), origin and status. The original call is denied with "saved as draft; do not retry". Drafts have their own lifecycle: `pending` → `approved` → `held` (Auto only) → `sending` → `sent` or `failed`, or `discarded`.
 
@@ -466,7 +472,7 @@ So the app checks `rlx --json upgrade --check` (fields at [install.py:96-105](ht
 - **UI:** a ui-tester agent drives the web UI on Vite with `FakeEngine` (no rlx, Claude Code or network).
 - **macOS native:** window, tray and menu checks capture only the app's window with `screencapture -l <windowid>` and drive menus with osascript; never full-screen captures.
 - **Windows and Linux:** tauri-driver in CI, with screenshots as artifacts. Every CI run also launches, renders, runs the §5.3 tests and quits.
-- **Gate:** the §8.5 corpus, plus a tool-less run's connector call being denied.
+- **Gate:** the §8.5 corpus; a tool-less run's connector call is denied; with no app gate client, a read call is denied and a due job records `job.skipped {reason: app_absent}` without a run; on reconnect, `catch_up: once` fires it once and `skip` waits.
 - **Every UI PR** carries a screenshot gallery.
 
 ## 14. Local storage and privacy
@@ -533,9 +539,8 @@ This doc adds:
 
 **For the hub:**
 1. Asks F–K (F blocks send safety).
-2. Does rlxd start at login, so jobs run with the app quit?
-3. rlxd's event transport, auth and `schema_version` (ask C).
-4. Where is the non-developer home, and should user hooks load in app runs? The design pins `--setting-sources project`, which leaves them out.
+2. rlxd's event transport, auth and `schema_version` (ask C).
+3. Where is the non-developer home, and should user hooks load in app runs? The design pins `--setting-sources project`, which leaves them out.
 
 ## 17. Traceability
 
@@ -561,7 +566,7 @@ All read-only: no sign-in or sign-out, no connector tool call, nothing sent.
 | ID | Command or source | Showed |
 |---|---|---|
 | E1, E8 | `claude --version`; `claude install --help`, `claude update --help` | `2.1.332`; native install, self-update |
-| E2 | `claude --help` | The flags cited above. `--tools`: "Built-in tools to make available"; `--strict-mcp-config`: "Only use MCP servers from --mcp-config"; `--no-session-persistence`: "they can't be resumed"; `--permission-mode` choices include `manual` and `dontAsk`; `-p` skips the trust dialog; `--bare`: "OAuth and keychain are never read" |
+| E2 | `claude --help` | The flags cited above. `--tools`: "Built-in tools"; `--strict-mcp-config`: "Only use MCP servers from --mcp-config"; `--no-session-persistence`: "can't be resumed"; `--permission-mode` includes `manual`, `dontAsk`; `-p` skips the trust dialog; `--bare`: "OAuth and keychain are never read" |
 | E3 | `claude auth login --help`, `claude auth status --help` | `--claudeai` default; `--json` |
 | E4 | `claude auth status --json` (values redacted) | `loggedIn`, `authMethod: "claude.ai"`, `subscriptionType` |
 | E5 | `claude mcp login --help` | "HTTP, SSE, or claude.ai connector"; `--no-browser` |
