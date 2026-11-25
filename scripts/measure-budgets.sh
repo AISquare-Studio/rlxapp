@@ -46,7 +46,9 @@
 #
 # Idle RAM (the budget's measure, as decided for rlx: phys_footprint)
 #   After the timed runs, the app is launched N more times (default 3). Each launch
-#   is left idle with its default window open for S seconds past first paint. The
+#   is left idle with its default window open for S seconds past first paint. Under
+#   the probe, app_info reports `measuring`, so the UI opens on Home (not onboarding)
+#   with its default widgets and agents, and saves no settings. The
 #   script then samples every process that belongs to the app:
 #     - the app process itself;
 #     - the WebKit XPC helpers that launchd started on its behalf:
