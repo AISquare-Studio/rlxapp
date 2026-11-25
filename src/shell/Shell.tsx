@@ -29,7 +29,12 @@ const DEV_NAV: NavItem[] = [
 
 const DEV_SCREENS = new Set<ScreenName>(DEV_NAV.map((n) => n.name));
 /** Screens with the member/detail panel, as in a chat app's channels. */
-const PANEL_SCREENS = new Set<ScreenName>(["home", "channel"]);
+/** Whether the detail panel shows: in channels (open by default), and on Home only if asked. */
+function panelOpen(screen: Screen, state: { rightPanel: boolean; homePanel: boolean }): boolean {
+  if (screen.name === "channel") return state.rightPanel;
+  if (screen.name === "home") return state.homePanel;
+  return false;
+}
 
 const MIN_SIDEBAR = 200;
 const MAX_SIDEBAR = 380;
@@ -89,7 +94,7 @@ export function Shell({ children }: { children: ReactNode }) {
         <main className={`main${screen.name === "channel" ? " main--chat" : ""}`} id="main" aria-label={screenTitle(screen)}>
           {children}
         </main>
-        {state.rightPanel && PANEL_SCREENS.has(screen.name) ? <DetailPanel /> : null}
+        {panelOpen(screen, state) ? <DetailPanel /> : null}
       </div>
       <AgentRunner />
       <Notices />
@@ -108,6 +113,8 @@ function TitleBar() {
   const { state, screen, dispatch, navigate } = useApp();
   const runs = useRuns();
   const inbox = state.drafts.length;
+  const needsYou = taskRuns(runs).filter((r) => r.state === "needs-you").length;
+  const open = panelOpen(screen, state);
   const crumbs: string[] = [screenTitle(screen)];
   if (screen.name === "channel") crumbs.push(channelName(screen.id, state.settings.agents));
   if (screen.name === "runs" && screen.runId) crumbs.push(runs.find((r) => r.id === screen.runId)?.title ?? "Run");
@@ -137,21 +144,26 @@ function TitleBar() {
         <button
           type="button"
           className="icon-button titlebar__inbox"
-          aria-label={`Approvals inbox, ${inbox} waiting`}
+          aria-label={inbox > 0 ? `Approvals inbox, ${inbox} waiting` : "Approvals inbox"}
           onClick={() => navigate({ name: "approvals", tab: "drafts" })}
         >
           <Icon name="inbox" />
-          {inbox > 0 ? <span className="badge-count" data-testid="inbox-count">{inbox}</span> : null}
+          {inbox > 0 ? <span className="dot-badge" data-testid="inbox-dot" aria-hidden="true" /> : null}
         </button>
-        <button
-          type="button"
-          className={`icon-button${state.rightPanel ? " is-active" : ""}`}
-          aria-label="Details panel"
-          aria-pressed={state.rightPanel}
-          onClick={() => dispatch({ type: "right-panel", open: !state.rightPanel })}
-        >
-          <Icon name="panel" />
-        </button>
+        {screen.name === "home" || screen.name === "channel" ? (
+          <button
+            type="button"
+            className={`icon-button titlebar__inbox${open ? " is-active" : ""}`}
+            aria-label={screen.name === "home" ? (needsYou > 0 ? `Needs you, ${needsYou} waiting` : "Needs you") : "Details panel"}
+            aria-pressed={open}
+            onClick={() =>
+              dispatch(screen.name === "home" ? { type: "home-panel", open: !state.homePanel } : { type: "right-panel", open: !state.rightPanel })
+            }
+          >
+            <Icon name="panel" />
+            {screen.name === "home" && needsYou > 0 && !open ? <span className="dot-badge" aria-hidden="true" /> : null}
+          </button>
+        ) : null}
         <button type="button" className="icon-button" aria-label="About rlx" onClick={() => dispatch({ type: "about", open: true })}>
           <Icon name="info" />
         </button>
@@ -160,7 +172,7 @@ function TitleBar() {
   );
 }
 
-function RailButton({ label, icon, active, badge, onClick }: { label: string; icon: IconName; active: boolean; badge?: number; onClick: () => void }) {
+function RailButton({ label, icon, active, dot, onClick }: { label: string; icon: IconName; active: boolean; dot?: boolean; onClick: () => void }) {
   return (
     <button
       type="button"
@@ -171,7 +183,7 @@ function RailButton({ label, icon, active, badge, onClick }: { label: string; ic
       onClick={onClick}
     >
       <Icon name={icon} size={20} />
-      {badge ? <span className="badge-count badge-count--rail">{badge}</span> : null}
+      {dot ? <span className="dot-badge dot-badge--rail" aria-hidden="true" /> : null}
     </button>
   );
 }
@@ -184,7 +196,7 @@ function SpaceRail() {
   const homeSpace = !inDev && screen.name !== "settings";
   return (
     <nav className="rail" aria-label="Spaces">
-      <RailButton label="Home" icon="home" active={homeSpace} badge={unread + state.drafts.length} onClick={() => navigate({ name: "home" })} />
+      <RailButton label={unread > 0 ? "Home, new messages" : "Home"} icon="home" active={homeSpace} dot={unread > 0} onClick={() => navigate({ name: "home" })} />
       <RailButton label="New agent" icon="plus" active={false} onClick={() => navigate({ name: "channel", id: MANAGER_ID })} />
       {state.settings.devMode ? (
         <div className="rail__group" role="group" aria-label="Developer">
@@ -198,19 +210,28 @@ function SpaceRail() {
   );
 }
 
-function SideLink({ active, onClick, children, label }: { active: boolean; onClick: () => void; children: ReactNode; label?: string }) {
+function SideLink({ active, onClick, children, label, describedBy }: { active: boolean; onClick: () => void; children: ReactNode; label?: string; describedBy?: string }) {
   return (
     <li>
-      <button type="button" className={`side-link reveal-host${active ? " is-active" : ""}`} aria-current={active ? "page" : undefined} aria-label={label} onClick={onClick}>
+      <button
+        type="button"
+        className={`side-link reveal-host${active ? " is-active" : ""}`}
+        aria-current={active ? "page" : undefined}
+        aria-label={label}
+        aria-describedby={describedBy}
+        onClick={onClick}
+      >
         {children}
       </button>
     </li>
   );
 }
 
-function statusLine(status: AgentStatus, now: number): string {
-  if (status.next === undefined) return status.label;
-  return `${status.label} · wakes ${wakeLabel(status.next, now)}`;
+/** The next wake, short enough to sit beside the name; revealed on hover and keyboard focus. */
+function shortStatus(status: AgentStatus, now: number): string {
+  if (status.kind === "running") return "running now";
+  if (status.next === undefined) return status.label.toLowerCase();
+  return `wakes ${wakeLabel(status.next, now)}`;
 }
 
 /** The channel list: dashboard, agents and approvals, the manager's DM, and one channel per agent. */
@@ -230,27 +251,12 @@ function HomeSidebar() {
           <Icon name="home" size={16} /> Dashboard
         </SideLink>
         <SideLink active={screen.name === "agents"} onClick={() => navigate({ name: "agents" })} label="Agents">
-          <Icon name="fleet" size={16} /> Agents <span className="muted side-link__end">{agents.length}</span>
+          <Icon name="fleet" size={16} /> Agents
         </SideLink>
         <SideLink active={screen.name === "approvals"} onClick={() => navigate({ name: "approvals", tab: "drafts" })} label="Approvals">
           <Icon name="inbox" size={16} /> Approvals
           {state.drafts.length ? <span className="badge-count side-link__end">{state.drafts.length}</span> : null}
         </SideLink>
-        {screen.name === "approvals" ? (
-          <li>
-            <ul className="side-list side-list--nested">
-              <SideLink active={screen.tab === "drafts"} onClick={() => navigate({ name: "approvals", tab: "drafts" })}>
-                Drafts <span className="muted">{state.drafts.length}</span>
-              </SideLink>
-              <SideLink active={screen.tab === "standing"} onClick={() => navigate({ name: "approvals", tab: "standing" })}>
-                Standing approvals
-              </SideLink>
-              <SideLink active={screen.tab === "activity"} onClick={() => navigate({ name: "approvals", tab: "activity" })}>
-                Activity
-              </SideLink>
-            </ul>
-          </li>
-        ) : null}
       </ul>
       <h2 className="sidebar__title">Direct messages</h2>
       <ul className="side-list" aria-label="Direct messages">
@@ -272,12 +278,18 @@ function HomeSidebar() {
         {agents.map((agent) => {
           const status = agentStatus(agent, running.has(agent.id), now);
           return (
-            <SideLink key={agent.id} active={here(agent.id)} onClick={() => navigate({ name: "channel", id: agent.id })} label={`${agent.name}, ${status.label}`}>
+            <SideLink
+              key={agent.id}
+              active={here(agent.id)}
+              onClick={() => navigate({ name: "channel", id: agent.id })}
+              label={`${agent.name}, ${status.label}`}
+              describedBy={`wake-${agent.id}`}
+            >
               <Avatar letter={agent.avatar} status={status.kind} />
-              <span className="side-link__stack" title={statusLine(status, now)}>
+              <span className="side-link__row">
                 <span className="side-link__text">{agent.name}</span>
-                <span className="muted side-link__sub reveal" data-testid={`status-${agent.id}`}>
-                  {statusLine(status, now)}
+                <span className="muted side-link__sub reveal" id={`wake-${agent.id}`} data-testid={`status-${agent.id}`}>
+                  {shortStatus(status, now)}
                 </span>
               </span>
               <Unread id={agent.id} />
@@ -292,11 +304,7 @@ function HomeSidebar() {
 function Unread({ id }: { id: string }) {
   const { state } = useApp();
   const count = state.unread[id] ?? 0;
-  return count ? (
-    <span className="badge-count side-link__end" aria-label={`${count} unread`}>
-      {count}
-    </span>
-  ) : null;
+  return count ? <span className="dot-badge dot-badge--inline side-link__end" role="img" aria-label={`${count} unread`} /> : null;
 }
 
 function Sidebar() {
@@ -356,8 +364,8 @@ function DetailPanel() {
   const { screen, state } = useApp();
   const agent = screen.name === "channel" ? state.settings.agents.find((a) => a.id === screen.id) : undefined;
   return (
-    <aside className="right-panel" aria-label="Details">
-      {agent ? <AgentDetails agent={agent} /> : <Members />}
+    <aside className="right-panel" aria-label={screen.name === "home" ? "Needs you" : "Details"}>
+      {screen.name === "home" ? <NeedsYou /> : agent ? <AgentDetails agent={agent} /> : <Members />}
     </aside>
   );
 }
@@ -375,7 +383,6 @@ function Members() {
   const withStatus = state.settings.agents.map((agent) => ({ agent, status: agentStatus(agent, running.has(agent.id), now) }));
   return (
     <>
-      <NeedsYou />
       {groups.map((group) => {
         const items = withStatus.filter((x) => x.status.kind === group.kind);
         if (!items.length) return null;
@@ -386,11 +393,19 @@ function Members() {
             </h2>
             <ul className="side-list">
               {items.map(({ agent, status }) => (
-                <SideLink key={agent.id} active={false} onClick={() => navigate({ name: "channel", id: agent.id })}>
+                <SideLink
+                  key={agent.id}
+                  active={false}
+                  onClick={() => navigate({ name: "channel", id: agent.id })}
+                  label={`${agent.name}, ${status.label}`}
+                  describedBy={`member-wake-${agent.id}`}
+                >
                   <Avatar letter={agent.avatar} status={status.kind} />
-                  <span className="side-link__stack">
+                  <span className="side-link__row">
                     <span className="side-link__text">{agent.name}</span>
-                    <span className="muted side-link__sub reveal">{status.next !== undefined ? `wakes ${wakeLabel(status.next, now)}` : status.label}</span>
+                    <span className="muted side-link__sub reveal" id={`member-wake-${agent.id}`}>
+                      {shortStatus(status, now)}
+                    </span>
                   </span>
                 </SideLink>
               ))}

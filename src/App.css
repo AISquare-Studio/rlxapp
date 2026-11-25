@@ -178,6 +178,27 @@ a {
   text-align: center;
 }
 
+/* A dot says "something new" without another number to read; one count per thing. */
+.dot-badge {
+  position: absolute;
+  top: var(--rlx-space-1);
+  right: var(--rlx-space-1);
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--rlx-primary);
+}
+
+.dot-badge--rail {
+  top: var(--rlx-space-2);
+  right: var(--rlx-space-2);
+}
+
+.dot-badge--inline {
+  position: static;
+  flex: none;
+}
+
 .badge-count--rail {
   top: 4px;
   right: 4px;
@@ -803,10 +824,23 @@ input[type="color"] {
 }
 
 .widget__status,
+/* One quiet line: what the last refresh cost; the time and interval on hover or focus. */
 .widget__meta {
+  display: flex;
+  align-items: center;
+  gap: var(--rlx-space-2);
+  min-width: 0;
   margin: var(--rlx-space-1) 0 var(--rlx-space-2);
+  overflow: hidden;
+  white-space: nowrap;
   font-size: var(--rlx-text-sm);
   color: var(--rlx-muted);
+}
+
+.widget__meta-more {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .widget__body {
@@ -827,15 +861,27 @@ input[type="color"] {
   gap: var(--rlx-space-2);
 }
 
+/* Items sit on the widget itself, grouped by spacing: no card inside the card. */
 .feed__item {
-  padding: var(--rlx-space-3);
+  padding: var(--rlx-space-2);
+  margin: 0 calc(-1 * var(--rlx-space-2));
   border-radius: var(--rlx-radius-sm);
-  background: var(--rlx-surface);
-  border: var(--rlx-border-width) solid transparent;
 }
 
-.feed__item--needs-you {
-  border-color: var(--rlx-border-color);
+.feed__item:hover,
+.feed__item:focus-within {
+  background: var(--rlx-hover-bg);
+}
+
+.feed__item--needs-you .feed__title::before {
+  content: "";
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  margin-right: var(--rlx-space-2);
+  border-radius: 50%;
+  background: var(--rlx-warning);
+  vertical-align: middle;
 }
 
 .feed__title {
@@ -868,15 +914,16 @@ input[type="color"] {
   font-size: var(--rlx-text-sm);
 }
 
+/* Mail sits on the widget itself, like feed items: no card inside the card. */
 .mail {
   padding: var(--rlx-space-2);
-  margin-bottom: var(--rlx-space-2);
+  margin: 0 calc(-1 * var(--rlx-space-2)) var(--rlx-space-1);
   border-radius: var(--rlx-radius-sm);
-  background: var(--rlx-surface);
 }
 
-.mail--draft {
-  border: var(--rlx-border-width) solid var(--rlx-border-color);
+.mail:hover,
+.mail:focus-within {
+  background: var(--rlx-hover-bg);
 }
 
 .mail__head {
@@ -909,9 +956,8 @@ input[type="color"] {
   align-items: center;
   justify-content: space-between;
   gap: var(--rlx-space-2);
-  padding: var(--rlx-space-1) var(--rlx-space-2);
+  padding: var(--rlx-space-1) 0;
   border-radius: var(--rlx-radius-sm);
-  background: var(--rlx-surface);
   font-size: var(--rlx-text-sm);
 }
 
@@ -1280,9 +1326,6 @@ input[type="color"] {
 
 .draft__body {
   margin-top: var(--rlx-space-2);
-  padding: var(--rlx-space-3);
-  border-radius: var(--rlx-radius-sm);
-  background: var(--rlx-chip-bg);
 }
 
 .draft__body p {
@@ -1680,9 +1723,21 @@ input[type="color"] {
   padding: var(--rlx-space-1) 0;
 }
 
-/* Status lines live in the title and accessible name; the dot shows the state. */
-.side-link__sub.reveal {
-  display: none;
+/* A name, and beside it (on hover or keyboard focus) when the agent wakes next. */
+.side-link__row {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: baseline;
+  gap: var(--rlx-space-2);
+}
+
+.side-link__row .side-link__text {
+  flex: 1;
+}
+
+.side-link__row .side-link__sub {
+  flex: none;
 }
 
 .side-link__sub {
@@ -1813,7 +1868,6 @@ input[type="color"] {
 }
 
 .turn-chip {
-  margin-left: var(--rlx-space-2);
   font-weight: 600;
 }
 
@@ -2031,9 +2085,6 @@ input[type="color"] {
   display: flex;
   flex-direction: column;
   gap: var(--rlx-space-1);
-  padding: var(--rlx-space-2) var(--rlx-space-3);
-  background: var(--rlx-chip-bg);
-  border-radius: var(--rlx-radius-sm);
   user-select: text;
   -webkit-user-select: text;
 }
@@ -2114,13 +2165,17 @@ input[type="color"] {
   box-shadow: var(--rlx-shadow-overlay);
   color: var(--rlx-foreground);
   font-size: var(--rlx-text-sm);
-  pointer-events: none;
   visibility: hidden;
 }
 
+/* Shown on hover and keyboard focus (also of a link inside); Escape hides it until you leave. */
 .reveal-host:hover > .priority__meta > .tip,
-.reveal-host:focus-visible > .priority__meta > .tip {
+.reveal-host:focus-within > .priority__meta > .tip {
   visibility: visible;
+}
+
+.reveal-host[data-dismissed] > .priority__meta > .tip {
+  visibility: hidden;
 }
 
 .checklist ul {
@@ -2506,4 +2561,32 @@ input[type="color"] {
 
 .agent-widget-off p {
   margin: 0;
+}
+
+/* A widget's own tools appear on hover or focus anywhere in it; its items reveal their own text. */
+.widget .widget__tools {
+  opacity: 0;
+  transition: opacity var(--rlx-motion);
+}
+
+.widget:hover .widget__tools,
+.widget:focus-within .widget__tools {
+  opacity: 1;
+}
+
+@media (hover: none) {
+  .widget .widget__tools {
+    opacity: 1;
+  }
+}
+
+/* Beside the name only while asked for (hover or keyboard focus), so names keep their width. */
+.side-link__row .side-link__sub.reveal {
+  display: none;
+}
+
+.side-link:hover .side-link__row .side-link__sub.reveal,
+.side-link:focus-visible .side-link__row .side-link__sub.reveal {
+  display: inline;
+  opacity: 1;
 }

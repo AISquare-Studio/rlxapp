@@ -32,7 +32,7 @@ export function WidgetCard(props: WidgetCardProps) {
   };
   return (
     <section
-      className={`widget reveal-host${wide ? " widget--wide" : ""}${tall ? " widget--tall" : ""}`}
+      className={`widget${wide ? " widget--wide" : ""}${tall ? " widget--tall" : ""}`}
       aria-label={title}
       data-widget-id={id}
       onDragOver={(e) => e.preventDefault()}
@@ -40,7 +40,7 @@ export function WidgetCard(props: WidgetCardProps) {
     >
       <header className="widget__header" draggable onDragStart={onDragStart}>
         <h3 className="widget__title">{title}</h3>
-        <div className="widget__tools reveal">
+        <div className="widget__tools">
           {actions}
           <button type="button" className="icon-button icon-button--sm" aria-label={`Move ${title} earlier`} disabled={index === 0} onClick={() => onMove(index - 1)}>
             <Icon name="left" size={16} />

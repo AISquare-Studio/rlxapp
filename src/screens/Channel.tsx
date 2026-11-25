@@ -122,7 +122,11 @@ function Conversation({ id, agent }: { id: string; agent?: Agent }) {
           const grouped = prev !== undefined && prev.from === m.from && m.at - prev.at < 5 * 60_000;
           const who = m.from === "owner" ? ownerName : name;
           return (
-            <li key={m.id} className={`message reveal-host${grouped ? " message--grouped" : ""}${m.from === "owner" ? " message--owner" : ""}`}>
+            <li
+              key={m.id}
+              className={`message reveal-host${grouped ? " message--grouped" : ""}${m.from === "owner" ? " message--owner" : ""}`}
+              tabIndex={0}
+            >
               {grouped ? (
                 <span className="message__gutter" aria-hidden="true" />
               ) : m.from === "owner" ? (

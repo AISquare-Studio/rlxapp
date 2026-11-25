@@ -77,8 +77,10 @@ describe("Slack digest", () => {
     wrap(<SlackDigestWidget settingsOpen={false} />);
     const meta = await screen.findByTestId("slack-meta");
     await screen.findByText(/Priya Shah/);
-    expect(meta.textContent).toBe("checked just now · model turn: Claude reviewed 3 new · every 15 min");
-    expect(meta.querySelector(".reveal")?.textContent).toBe(" · every 15 min");
+    // One quiet line: what the refresh cost; when, and how often, on hover or focus.
+    expect(within(meta).getByTestId("slack-turn").textContent).toBe("Claude reviewed 3 new");
+    expect(meta.querySelector(".reveal")?.textContent).toBe("checked just now · every 15 min");
+    expect(meta.textContent).not.toMatch(/^\s*·|·\s*$/);
     const items = document.querySelectorAll(".feed__item--needs-you");
     expect(items.length).toBe(3);
     for (const item of items) {
@@ -110,15 +112,16 @@ describe("Gmail dashboard", () => {
       fireEvent.click(screen.getByRole("menuitem", { name: "Refresh now" }));
     };
     await screen.findByText(/Priya Shah/);
-    expect(turn()).toBe("model turn: Claude reviewed 3 new");
+    expect(turn()).toBe("Claude reviewed 3 new");
     refreshNow();
-    await vi.waitFor(() => expect(turn()).toBe("nothing new, no Claude usage"));
+    await vi.waitFor(() => expect(turn()).toBe("Nothing new, no Claude usage"));
     refreshNow();
-    await vi.waitFor(() => expect(screen.getByTestId("slack-meta").textContent).toMatch(/^checked/));
-    expect(turn()).toBe("nothing new, no Claude usage");
+    // Let the second refresh finish: it found nothing new, so still no model turn.
+    await vi.waitFor(async () => expect((await engine.runs()).filter((r) => r.kind === "widget_refresh" && r.state === "done")).toHaveLength(3));
+    expect(turn()).toBe("Nothing new, no Claude usage");
     engine.simulateNewSlack(3);
     refreshNow();
-    await vi.waitFor(() => expect(turn()).toBe("model turn: Claude reviewed 3 new"));
+    await vi.waitFor(() => expect(turn()).toBe("Claude reviewed 3 new"));
   });
 
   it("creates a draft from Draft reply that shows up in Approvals with the sign-off", async () => {

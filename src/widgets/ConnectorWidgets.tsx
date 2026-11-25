@@ -52,20 +52,20 @@ export function SlackDigestWidget({ settingsOpen }: { settingsOpen: boolean }) {
     <div className="feed">
       <div className="widget__meta-row">
       <p className="widget__meta reveal-host" data-testid="slack-meta" tabIndex={0}>
-        {status === "refreshing" && !data ? "Checking…" : ago(now, fetchedAt)}
-        {reviewed !== undefined ? " · " : null}
-        {reviewed !== undefined ? (
-          reviewed > 0 ? (
-            <span className="turn-chip turn-chip--model" data-testid="slack-turn">
-              model turn: Claude reviewed {reviewed} new
-            </span>
-          ) : (
-            <span className="turn-chip" data-testid="slack-turn">
-              nothing new, no Claude usage
-            </span>
-          )
-        ) : null}
-        <span className="reveal">{` · every ${interval} min`}</span>
+        {reviewed === undefined ? (
+          <span>{status === "refreshing" ? "Checking…" : ago(now, fetchedAt)}</span>
+        ) : reviewed > 0 ? (
+          <span className="turn-chip turn-chip--model" data-testid="slack-turn">
+            Claude reviewed {reviewed} new
+          </span>
+        ) : (
+          <span className="turn-chip" data-testid="slack-turn">
+            Nothing new, no Claude usage
+          </span>
+        )}
+        <span className="reveal widget__meta-more">
+          {reviewed === undefined ? "" : `${ago(now, fetchedAt)} · `}every {interval} min
+        </span>
       </p>
       <MoreMenu
         label="More actions for Slack digest"
@@ -106,10 +106,11 @@ export function SlackDigestWidget({ settingsOpen }: { settingsOpen: boolean }) {
           <p className="feed__summary">{data.summary}</p>
           <ul className="feed__list">
             {data.items.map((item) => (
-              <li key={item.id} className={`feed__item${item.needsYou ? " feed__item--needs-you" : ""}`}>
+              <li key={item.id} className={`feed__item reveal-host${item.needsYou ? " feed__item--needs-you" : ""}`} tabIndex={0}>
                 <div className="feed__title">{item.title}</div>
                 <div className="feed__sub">
-                  {item.subtitle} · {item.time}
+                  {item.subtitle}
+                  <span className="reveal"> · {item.time}</span>
                 </div>
                 {item.needsYou ? (
                   <>
@@ -159,9 +160,9 @@ export function GmailWidget({ settingsOpen }: { settingsOpen: boolean }) {
       <section className="gmail__section" aria-label="Needs a reply">
         <h4>Needs a reply</h4>
         {data.needsReply.map((m) => (
-          <div key={m.id} className="mail">
+          <div key={m.id} className="mail reveal-host" tabIndex={0}>
             <div className="mail__head">
-              <strong>{m.from}</strong> <span className="muted">{m.time}</span>
+              <strong>{m.from}</strong> <span className="muted reveal">{m.time}</span>
             </div>
             <div className="mail__subject">{m.subject}</div>
             <div className="mail__snippet muted">{m.snippet}</div>
@@ -187,9 +188,9 @@ export function GmailWidget({ settingsOpen }: { settingsOpen: boolean }) {
       <section className="gmail__section" aria-label="Important unread">
         <h4>Important unread</h4>
         {data.importantUnread.map((m) => (
-          <div key={m.id} className="mail">
+          <div key={m.id} className="mail reveal-host" tabIndex={0}>
             <div className="mail__head">
-              <strong>{m.from}</strong> <span className="muted">{m.time}</span>
+              <strong>{m.from}</strong> <span className="muted reveal">{m.time}</span>
             </div>
             <div className="mail__subject">{m.subject}</div>
           </div>
@@ -292,10 +293,11 @@ export function GenericConnectorWidget({ manifest }: { manifest: GenericManifest
       <p className="feed__summary">{data.summary}</p>
       <ul className="feed__list">
         {data.items.map((item) => (
-          <li key={item.id} className={`feed__item${item.needsYou ? " feed__item--needs-you" : ""}`}>
+          <li key={item.id} className={`feed__item reveal-host${item.needsYou ? " feed__item--needs-you" : ""}`} tabIndex={0}>
             <div className="feed__title">{item.title}</div>
             <div className="feed__sub">
-              {item.subtitle} · {item.time}
+              {item.subtitle}
+              <span className="reveal"> · {item.time}</span>
             </div>
             {item.needsYou && item.why ? (
               <div className="feed__why">

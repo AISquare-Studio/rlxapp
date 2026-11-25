@@ -179,6 +179,8 @@ export interface AppState {
   notices: Notice[];
   /** Unread agent messages, by channel. */
   unread: Record<string, number>;
+  /** The detail panel on Home: closed by default (calm), and then it shows only Needs you. */
+  homePanel: boolean;
 }
 
 export const CONNECTOR_NAMES = ["claude.ai Slack", "claude.ai Gmail", "claude.ai Linear"] as const;

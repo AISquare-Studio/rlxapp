@@ -11,8 +11,8 @@ const onboarded: Settings = { ...DEFAULT_SETTINGS, onboarded: true };
 beforeEach(() => localStorage.clear());
 afterEach(() => vi.useRealTimers());
 
-function renderApp(settings: Settings = onboarded) {
-  const engine = new FakeEngine({ stepMs: 20 });
+function renderApp(settings: Settings = onboarded, stepMs = 20) {
+  const engine = new FakeEngine({ stepMs });
   render(<App platform={browserPlatform} engine={engine} initialSettings={settings} />);
   return engine;
 }
@@ -36,7 +36,7 @@ function pick(menu: string, item: string, scope: HTMLElement = document.body) {
 
 /** Simulate 9:00, from the Start of day channel's ⋯ menu. */
 async function simulateNineInChannel() {
-  fireEvent.click(await screen.findByRole("button", { name: "Start of day, Scheduled 09:00" }));
+  fireEvent.click(await within(screen.getByRole("list", { name: "Agent channels" })).findByRole("button", { name: "Start of day, Scheduled 09:00" }));
   pick("More actions for Start of day", "Simulate 9:00 (demo)");
 }
 
@@ -75,7 +75,8 @@ describe("schedules", () => {
 
 describe("Agents section", () => {
   it("lists running, scheduled and asleep agents with next wake, last run, connectors and Wake now / Pause / Edit", async () => {
-    renderApp();
+    // A slower engine, so a woken agent's brief "Running" state is reliably seen.
+    renderApp(onboarded, 400);
     fireEvent.click(await screen.findByRole("button", { name: "Agents" }));
     const gtm = await screen.findByTestId("agent-row-gtm-agent");
     expect(within(gtm).getByText("Running")).toBeTruthy();

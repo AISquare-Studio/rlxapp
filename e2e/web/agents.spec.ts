@@ -11,7 +11,7 @@ test("A, B: a chat layout with agents as channels, and an Agents section with ru
   await expect(channels.getByRole("button", { name: "GTM agent, Running" })).toBeVisible();
   await expect(channels.getByRole("button", { name: "Meetings agent, Scheduled 08:45" })).toBeVisible();
   await expect(channels.getByRole("button", { name: "Slack agent, Asleep" })).toBeVisible();
-  await expect(page.getByRole("complementary", { name: "Details" })).toBeVisible();
+  await expect(page.getByRole("complementary")).toHaveCount(0);
 
   await page.getByRole("button", { name: "Agents", exact: true }).click();
   const meetings = page.getByTestId("agent-row-meetings-agent");
@@ -70,13 +70,13 @@ test("C, D, E: create Start of day with the manager, Simulate 9:00, then the dra
 test("F: the Slack widget refreshes silently with no model turn, and takes one when something is new", async ({ page }) => {
   await openShell(page);
   const slack = page.getByRole("region", { name: "Slack digest" });
-  await expect(slack.getByTestId("slack-turn")).toHaveText("model turn: Claude reviewed 3 new");
+  await expect(slack.getByTestId("slack-turn")).toHaveText("Claude reviewed 3 new");
   await slack.getByRole("button", { name: "More actions for Slack digest" }).click();
   await page.getByRole("menuitem", { name: "Refresh now" }).click();
-  await expect(slack.getByTestId("slack-turn")).toHaveText("nothing new, no Claude usage");
+  await expect(slack.getByTestId("slack-turn")).toHaveText("Nothing new, no Claude usage");
   await slack.getByRole("button", { name: "More actions for Slack digest" }).click();
   await page.getByRole("menuitem", { name: "New messages arrive (demo)" }).click();
-  await expect(slack.getByTestId("slack-turn")).toHaveText("model turn: Claude reviewed 3 new");
+  await expect(slack.getByTestId("slack-turn")).toHaveText("Claude reviewed 3 new");
 });
 
 test("G: no raw run logs outside Developer mode", async ({ page }) => {

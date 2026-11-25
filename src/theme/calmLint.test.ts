@@ -65,3 +65,12 @@ describe("calm lint", () => {
     expect(offenders).toEqual([]);
   });
 });
+
+describe("densities (F7)", () => {
+  it("keep every spacing step on the 8 px grid, in every density", () => {
+    const grid = new Set([4, 8, 12, 16, 24, 32, 48]);
+    const steps = [...tokensCss.matchAll(/--rlx-space-\d+:\s*(\d+)px/g)].map((m) => Number(m[1]));
+    expect(steps.length).toBeGreaterThanOrEqual(21);
+    expect(steps.filter((n) => !grid.has(n))).toEqual([]);
+  });
+});

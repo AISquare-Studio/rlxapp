@@ -43,7 +43,8 @@ export type Action =
   | { type: "notice"; notice: Notice }
   | { type: "notice-dismiss"; id: string }
   | { type: "about"; open: boolean }
-  | { type: "right-panel"; open: boolean };
+  | { type: "right-panel"; open: boolean }
+  | { type: "home-panel"; open: boolean };
 
 function sameScreen(a: Screen | undefined, b: Screen): boolean {
   return JSON.stringify(a) === JSON.stringify(b);
@@ -129,6 +130,8 @@ export function reducer(state: AppState, action: Action): AppState {
       return { ...state, aboutOpen: action.open };
     case "right-panel":
       return { ...state, rightPanel: action.open };
+    case "home-panel":
+      return { ...state, homePanel: action.open };
   }
 }
 
@@ -241,6 +244,7 @@ export function initialState(settings: Settings, now: number): AppState {
     briefing: null,
     notices: [],
     unread: {},
+    homePanel: false,
   };
 }
 

@@ -158,29 +158,29 @@
   --rlx-terminal-fg: #E6E6E6;
 }
 
-/* Density: three levels, set with <html data-density="…">. */
+/* Density: three levels, set with <html data-density="…">. Every step stays on the 8 px grid. */
 [data-density="compact"] {
-  --rlx-space-1: 3px;
-  --rlx-space-2: 5px;
+  --rlx-space-1: 4px;
+  --rlx-space-2: 4px;
   --rlx-space-3: 8px;
-  --rlx-space-4: 11px;
+  --rlx-space-4: 12px;
   --rlx-space-6: 16px;
-  --rlx-space-8: 22px;
+  --rlx-space-8: 24px;
   --rlx-space-12: 32px;
   --rlx-font-size: 13px;
-  --rlx-row: 28px;
+  --rlx-row: 32px;
 }
 
 [data-density="spacious"] {
-  --rlx-space-1: 5px;
-  --rlx-space-2: 10px;
-  --rlx-space-3: 15px;
-  --rlx-space-4: 20px;
-  --rlx-space-6: 30px;
-  --rlx-space-8: 40px;
-  --rlx-space-12: 60px;
+  --rlx-space-1: 8px;
+  --rlx-space-2: 12px;
+  --rlx-space-3: 16px;
+  --rlx-space-4: 24px;
+  --rlx-space-6: 32px;
+  --rlx-space-8: 48px;
+  --rlx-space-12: 48px;
   --rlx-font-size: 15px;
-  --rlx-row: 44px;
+  --rlx-row: 48px;
 }
 
 @media (prefers-reduced-motion: reduce) {

@@ -57,8 +57,12 @@ describe("App", () => {
     expect(within(channels).getByRole("button", { name: "Slack agent, Asleep" })).toBeTruthy();
     expect(within(channels).getByRole("button", { name: "Meetings agent, Scheduled 08:45" })).toBeTruthy();
     expect(await within(channels).findByRole("button", { name: "GTM agent, Running" })).toBeTruthy();
-    expect(screen.getByRole("complementary", { name: "Details" })).toBeTruthy();
+    // Home stays calm: no side panel until asked for; it then shows only what needs you.
+    expect(screen.queryByRole("complementary")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: /^Needs you/ }));
+    expect(screen.getByRole("complementary", { name: "Needs you" })).toBeTruthy();
     fireEvent.click(within(channels).getByRole("button", { name: "Slack agent, Asleep" }));
+    expect(screen.getByRole("complementary", { name: "Details" })).toBeTruthy();
     expect(await screen.findByRole("heading", { level: 1, name: "# slack-agent" })).toBeTruthy();
     expect(screen.getByRole("textbox", { name: "Message Slack agent" })).toBeTruthy();
     expect(within(screen.getByTestId("agent-details")).getByText("Every 15 min")).toBeTruthy();

@@ -26,7 +26,6 @@ function time(ms: number): string {
 export function Approvals() {
   const { screen, navigate, state } = useApp();
   const tab = screen.name === "approvals" ? screen.tab : "drafts";
-  const counts = { drafts: state.drafts.length, standing: state.approvals.filter((a) => a.status === "active").length, activity: state.activity.length };
   return (
     <div>
       <div className="screen-header">
@@ -45,7 +44,7 @@ export function Approvals() {
             className={`tab${tab === t.id ? " is-active" : ""}`}
             onClick={() => navigate({ name: "approvals", tab: t.id })}
           >
-            {t.label} <span className="tab__count">{counts[t.id]}</span>
+            {t.label}
           </button>
         ))}
       </div>
@@ -83,10 +82,13 @@ function Drafts() {
             </details>
           ) : null}
           {editing === draft.id ? (
-            <label className="field">
-              <span>Message</span>
-              <textarea rows={4} value={text} onChange={(e) => setText(e.target.value)} />
-            </label>
+            <>
+              <label className="field">
+                <span>Message</span>
+                <textarea rows={4} value={text} onChange={(e) => setText(e.target.value)} />
+              </label>
+              <SignOff agentName={agentName} ownerName={ownerName} />
+            </>
           ) : (
             <div className="draft__body">
               <p>{draft.body}</p>
@@ -184,7 +186,7 @@ function Standing() {
             </dl>
             {a.status === "active" ? (
               <div className="button-row">
-                <button type="button" className="button button--danger" onClick={() => setRevoking(a)}>
+                <button type="button" className="button" onClick={() => setRevoking(a)}>
                   Revoke
                 </button>
               </div>

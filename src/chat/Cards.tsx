@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useId, useState } from "react";
 import { nextId } from "../agents/useAgents.ts";
 import { SignOff } from "../brand/SignOff.tsx";
 import { START_OF_DAY_ID, avatarFor, nextWake, scheduleLabel, wakeLabel } from "../state/agents.ts";
@@ -30,20 +30,48 @@ function PriorityList({ title, items }: { title: string; items: PriorityItem[] }
       <h4>{title}</h4>
       <ol className="priority__list">
         {items.map((item) => (
-          <li key={item.id} className="reveal-host" tabIndex={0}>
-            <div className="priority__text">{item.text}</div>
-            <div className="priority__meta">
-              <Sources sources={item.sources} />
-              {item.why ? (
-                <span className="priority__why tip" role="tooltip">
-                  {item.why}
-                </span>
-              ) : null}
-            </div>
-          </li>
+          <PriorityRow key={item.id} item={item} />
         ))}
       </ol>
     </section>
+  );
+}
+
+/**
+ * One priority item. Its reason is a tip: shown on hover and on keyboard focus (of the item or a
+ * source link in it), announced through aria-describedby, and dismissed with Escape without
+ * moving focus (WCAG 1.4.13).
+ */
+function PriorityRow({ item }: { item: PriorityItem }) {
+  const [dismissed, setDismissed] = useState(false);
+  const tipId = useId();
+  return (
+    <li
+      className="reveal-host priority__item"
+      tabIndex={0}
+      aria-describedby={item.why ? tipId : undefined}
+      data-dismissed={dismissed ? "true" : undefined}
+      onKeyDown={(e) => {
+        if (e.key === "Escape" && !dismissed) {
+          e.stopPropagation();
+          setDismissed(true);
+        }
+      }}
+      onBlur={(e) => {
+        if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setDismissed(false);
+      }}
+      onMouseLeave={() => setDismissed(false)}
+    >
+      <div className="priority__text">{item.text}</div>
+      <div className="priority__meta">
+        <Sources sources={item.sources} />
+        {item.why ? (
+          <span className="priority__why tip" role="tooltip" id={tipId} data-testid="why-tip">
+            {item.why}
+          </span>
+        ) : null}
+      </div>
+    </li>
   );
 }
 
@@ -120,10 +148,13 @@ function EmailDraftCard({ draftId }: { draftId: string }) {
       </div>
       {draft.subject ? <div className="draft__subject">{draft.subject}</div> : null}
       {editing ? (
-        <label className="field">
-          <span>Message</span>
-          <textarea rows={4} value={text} onChange={(e) => setText(e.target.value)} />
-        </label>
+        <>
+          <label className="field">
+            <span>Message</span>
+            <textarea rows={4} value={text} onChange={(e) => setText(e.target.value)} />
+          </label>
+          <SignOff agentName={agentName} ownerName={ownerName} />
+        </>
       ) : (
         <div className="draft__body">
           <p>{draft.body}</p>
