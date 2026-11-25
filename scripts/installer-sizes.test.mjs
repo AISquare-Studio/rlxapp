@@ -1,8 +1,8 @@
 // @vitest-environment node
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, truncateSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, truncateSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { LIMIT_BYTES, evaluate, findInstallers } from "./installer-sizes.mjs";
 
@@ -23,8 +23,8 @@ function fakeBundle(files) {
   return dir;
 }
 
-function runGate(dir) {
-  return spawnSync(process.execPath, [SCRIPT, "--dir", dir], { encoding: "utf8" });
+function runGate(dir, script = SCRIPT) {
+  return spawnSync(process.execPath, [script, "--dir", dir], { encoding: "utf8" });
 }
 
 afterEach(() => {
@@ -85,5 +85,28 @@ describe("installer size gate", () => {
     const result = runGate(fakeBundle({ "macos/README": 10 }));
     expect(result.status).toBe(1);
     expect(result.stderr).toContain("no installers");
+  });
+
+  // Node resolves symlinks for the main module but not for argv[1]; the entry-point guard
+  // must still recognise the script, or the gate would print nothing and exit 0.
+  it.skipIf(process.platform === "win32")("still gates when run through a symlinked file", () => {
+    const bundle = fakeBundle({ "dmg/rlx_0.1.0_aarch64.dmg": 26 * MB });
+    const links = mkdtempSync(join(tmpdir(), "rlx-sizes-link-"));
+    dirs.push(links);
+    const linked = join(links, "gate.mjs");
+    symlinkSync(SCRIPT, linked);
+    const result = runGate(bundle, linked);
+    expect(result.status).toBe(1);
+    expect(result.stdout).toContain("| rlx_0.1.0_aarch64.dmg | 26.00 MB | 26000000 | OVER |");
+  });
+
+  it.skipIf(process.platform === "win32")("still gates when run through a symlinked directory", () => {
+    const bundle = fakeBundle({ "dmg/rlx_0.1.0_aarch64.dmg": 26 * MB });
+    const links = mkdtempSync(join(tmpdir(), "rlx-sizes-link-"));
+    dirs.push(links);
+    symlinkSync(dirname(SCRIPT), join(links, "scripts"), "dir");
+    const result = runGate(bundle, join(links, "scripts", "installer-sizes.mjs"));
+    expect(result.status).toBe(1);
+    expect(result.stdout).toContain("OVER");
   });
 });

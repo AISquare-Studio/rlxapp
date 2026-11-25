@@ -12,9 +12,9 @@
 //   0 otherwise.
 // The .AppImage is printed but never gated: it bundles WebKitGTK and its libraries, so it
 // can't fit the budget.
-import { existsSync, readdirSync, statSync } from "node:fs";
+import { existsSync, readdirSync, realpathSync, statSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 
 export const LIMIT_BYTES = 25_000_000;
@@ -80,6 +80,9 @@ function main() {
   return over.length > 0 ? 1 : 0;
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
+// Run as a CLI only when this file is the entry point. Compare real paths: Node
+// resolves symlinks for the main module but argv[1] keeps the path as typed, so a
+// plain comparison would skip the gate (and exit 0) when run through a symlink.
+if (process.argv[1] && realpathSync(process.argv[1]) === fileURLToPath(import.meta.url)) {
   process.exitCode = main();
 }
