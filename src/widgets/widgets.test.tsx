@@ -3,7 +3,8 @@ import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { App } from "../App.tsx";
 import { FakeEngine } from "../engine/fake/FakeEngine.ts";
-import { browserPlatform } from "../platform/index.ts";
+import { browserPlatform, type Platform, type WidgetSource } from "../platform/index.ts";
+import { WidgetHost } from "../platform/widgetHost.ts";
 import { AppProvider } from "../state/AppProvider.tsx";
 import { DEFAULT_SETTINGS } from "../state/model.ts";
 import { AgentFrame, AGENT_WIDGET_SANDBOX } from "./AgentWidget.tsx";
@@ -170,6 +171,57 @@ describe("Home", () => {
     expect(await within(linear).findByTestId("generic-widget")).toBeTruthy();
     for (const button of screen.getAllByRole("button")) {
       expect(button.getAttribute("aria-label") ?? button.textContent?.trim()).toBeTruthy();
+    }
+  });
+});
+
+describe("agent-made widget tile in the app (widget host)", () => {
+  function nativeLike(source: WidgetSource, calls: string[]): Platform {
+    const host = new WidgetHost({
+      show: (b) => (calls.push(`show ${b.width}x${b.height}`), Promise.resolve()),
+      hide: () => (calls.push("hide"), Promise.resolve()),
+      mount: (ws) => (calls.push(`mount ${ws.map((w) => `${w.id}@${w.version}`).join(",")}`), Promise.resolve(ws.map((w) => w.id))),
+      push: (id) => (calls.push(`push ${id}`), Promise.resolve()),
+      register: () => Promise.resolve(""),
+      onAction: () => () => {},
+    });
+    return {
+      ...browserPlatform,
+      runtime: "native",
+      widgetSource: () => Promise.resolve(source),
+      widgetHost: host,
+      setWidgetsCovered: (covered) => void host.setCovered(covered),
+    };
+  }
+
+  it("shows a calm off state, with the policy's reason behind a fold, while agent-made widgets are off", async () => {
+    const platform = nativeLike({ off: "off on macOS until the isolation probe passes there" }, []);
+    render(<App platform={platform} engine={new FakeEngine({ stepMs: 20, seed: false })} initialSettings={settings} />);
+    const tile = await screen.findByRole("region", { name: "Open pull requests" });
+    expect(within(tile).getByText("Agent-made widgets are off here for now.")).toBeTruthy();
+    expect(within(tile).getByTestId("agent-widget-off-reason").textContent).toBe(
+      "Agent-made widgets are off on macOS until the isolation probe passes there.",
+    );
+    expect(tile.querySelector("iframe")).toBeNull();
+  });
+
+  it("places the widgets webview over its tile, mounts and feeds it, and hides it while a modal is open", async () => {
+    const calls: string[] = [];
+    const platform = nativeLike({ host: { id: "w-prs", version: 1 } }, calls);
+    const rect = vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockReturnValue(DOMRect.fromRect({ x: 360, y: 400, width: 280, height: 200 }));
+    try {
+      render(<App platform={platform} engine={new FakeEngine({ stepMs: 20, seed: false })} initialSettings={settings} />);
+      await screen.findByTestId("agent-widget-host-slot");
+      await vi.waitFor(() => expect(calls).toContain("push w-prs"));
+      expect(calls.slice(0, 2)).toEqual(["show 280x200", "mount w-prs@1"]);
+      expect(document.querySelector("iframe[title='Open pull requests']")).toBeNull();
+
+      fireEvent.click(screen.getByRole("button", { name: /Add widget/ }));
+      await vi.waitFor(() => expect(calls.at(-1)).toBe("hide"));
+      fireEvent.click(within(screen.getByRole("dialog", { name: "Add a widget" })).getByRole("button", { name: "Close" }));
+      await vi.waitFor(() => expect(calls.at(-1)).toBe("show 280x200"));
+    } finally {
+      rect.mockRestore();
     }
   });
 });

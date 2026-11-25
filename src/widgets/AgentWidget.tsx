@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { AGENT_WIDGET_HTML } from "../engine/fake/data.ts";
 import { newRunId, useEngineData } from "../engine/hooks.ts";
 import type { WidgetSource } from "../platform/index.ts";
+import type { WidgetBounds } from "../platform/widgetHost.ts";
 import { useApp } from "../state/context.ts";
 import { Modal } from "../ui/Modal.tsx";
 import { tokensFor } from "../theme/tokensFor.ts";
@@ -83,10 +84,17 @@ export function AgentFrame({ id, version, title, html, data }: AgentFrameProps) 
   if (!source) return <p className="muted">Loading widget…</p>;
   if ("off" in source)
     return (
-      <p className="muted" data-testid="agent-widget-off">
-        {source.off}
-      </p>
+      <div className="agent-widget-off" data-testid="agent-widget-off">
+        <p className="muted">Agent-made widgets are off here for now.</p>
+        <details className="fold">
+          <summary>Why</summary>
+          <p className="muted" data-testid="agent-widget-off-reason">
+            Agent-made widgets are {source.off}.
+          </p>
+        </details>
+      </div>
     );
+  if ("host" in source) return <HostedFrame id={source.host.id} version={source.host.version} title={title} data={data} />;
   return (
     <div className={`agent-frame-wrap${focused ? " is-focused" : ""}`}>
       <iframe
@@ -103,6 +111,53 @@ export function AgentFrame({ id, version, title, html, data }: AgentFrameProps) 
       />
     </div>
   );
+}
+
+/** The widget's bounds in the window, in logical px: the main webview fills the window. */
+function boundsOf(el: HTMLElement): WidgetBounds {
+  const r = el.getBoundingClientRect();
+  return { x: Math.round(r.left), y: Math.round(r.top), width: Math.round(r.width), height: Math.round(r.height) };
+}
+
+/**
+ * An agent-made widget in the widget host (architecture §5.3): this tile keeps an empty slot,
+ * and the `widgets` child webview is placed over it, mounted and fed through the core. The
+ * slot's bounds follow resizes and scrolling; the webview hides while something covers Home.
+ */
+function HostedFrame({ id, version, title, data }: { id: string; version: number; title: string; data: unknown }) {
+  const { platform } = useApp();
+  const host = platform.widgetHost;
+  const [mounted, setMounted] = useState(false);
+  const slot = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    const el = slot.current;
+    if (!host || !el) return undefined;
+    let active = true;
+    const place = () => void host.place(boundsOf(el));
+    place();
+    void host
+      .mount([{ id, version, title }])
+      .then((ids) => active && setMounted(ids.includes(id)))
+      .catch((error: unknown) => console.error("widget mount failed", error));
+    const resize = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(place);
+    resize?.observe(el);
+    window.addEventListener("scroll", place, true);
+    window.addEventListener("resize", place);
+    return () => {
+      active = false;
+      resize?.disconnect();
+      window.removeEventListener("scroll", place, true);
+      window.removeEventListener("resize", place);
+      void host.place(null);
+    };
+  }, [host, id, version, title]);
+
+  useEffect(() => {
+    if (host && mounted) void host.push(id, data).catch((error: unknown) => console.error("widget push failed", error));
+  }, [host, mounted, id, data]);
+
+  return <div className="agent-host-slot" ref={slot} data-testid="agent-widget-host-slot" aria-label={title} role="region" />;
 }
 
 /** The built-in example of an agent-made widget: open pull requests per repository. */

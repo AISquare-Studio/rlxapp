@@ -2483,3 +2483,19 @@ input[type="color"] {
 .empty-quiet {
   margin: 0;
 }
+
+/* The widgets webview is laid over this slot (native, when agent-made widgets are on). */
+.agent-host-slot {
+  min-height: 160px;
+  border-radius: var(--rlx-radius-sm);
+}
+
+.agent-widget-off {
+  display: flex;
+  flex-direction: column;
+  gap: var(--rlx-space-2);
+}
+
+.agent-widget-off p {
+  margin: 0;
+}

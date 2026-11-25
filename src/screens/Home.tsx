@@ -147,6 +147,12 @@ export function Home() {
 
       <StartOfDay />
 
+      {/*
+        Built-ins render as escaped React in main: on Windows and Linux by the widget host's
+        policy, and on macOS until the core ships built-in documents for the widgets webview.
+        Agent-made tiles go through platform.widgetSource (inline in the preview, the widgets
+        webview in the app, or off by policy).
+      */}
       <h2 className="section-title">Widgets</h2>
       <div className="widget-grid" data-covered={covered ? "true" : undefined}>
         {widgets.map((widget, index) => {

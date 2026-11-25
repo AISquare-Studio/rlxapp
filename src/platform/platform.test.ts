@@ -1,6 +1,6 @@
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import { afterEach, describe, expect, it } from "vitest";
-import { AGENT_WIDGETS_OFF, browserPlatform, detectPlatform, nativePlatform } from "./index.ts";
+import { browserPlatform, detectPlatform, nativePlatform } from "./index.ts";
 
 // The Tauri runtime sets `globalThis.isTauri`; mockIPC only fakes the IPC bridge.
 function enterTauri() {
@@ -75,11 +75,29 @@ describe("nativePlatform", () => {
 });
 
 describe("widgetSource", () => {
-  it("keeps agent-made widgets off in the app, whose main window allows no frames", async () => {
-    await expect(nativePlatform.widgetSource("w", 1, "<p>hi</p>")).resolves.toEqual({ off: AGENT_WIDGETS_OFF });
+  it("keeps agent-made widgets off in the app while the host's policy says so, and registers nothing", async () => {
+    enterTauri();
+    const calls: string[] = [];
+    mockIPC((cmd) => {
+      calls.push(cmd);
+      if (cmd === "widgets_policy") {
+        return { widgetWebview: true, builtins: "widgets", agentWidgets: "off: off on macOS until the isolation probe passes there" };
+      }
+      throw new Error(`unexpected command ${cmd}`);
+    });
+    await expect(nativePlatform.widgetPolicy()).resolves.toEqual({
+      widgetWebview: true,
+      builtins: "widgets",
+      agentWidgets: { on: false, reason: "off on macOS until the isolation probe passes there" },
+    });
+    await expect(nativePlatform.widgetSource("w", 1, "<p>hi</p>")).resolves.toEqual({
+      off: "off on macOS until the isolation probe passes there",
+    });
+    expect(calls).toEqual(["widgets_policy"]);
   });
 
-  it("renders them inline in the browser preview", async () => {
+  it("renders them inline in the browser preview, which has no widget webview", async () => {
     await expect(browserPlatform.widgetSource("w", 1, "<p>hi</p>")).resolves.toEqual({ srcdoc: "<p>hi</p>" });
+    await expect(browserPlatform.widgetPolicy()).resolves.toEqual({ widgetWebview: false, builtins: "main", agentWidgets: { on: true } });
   });
 });
