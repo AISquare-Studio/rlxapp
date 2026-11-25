@@ -3,10 +3,11 @@
 # measure-budgets.sh: measure rlx (the app built from this repo) against its size and speed budgets (macOS only).
 #
 # Usage:
-#   scripts/measure-budgets.sh [--build] [--runs N] [--idle-seconds S] [--purge] [--enforce]
+#   scripts/measure-budgets.sh [--build] [--runs N] [--idle-runs N] [--idle-seconds S] [--purge] [--enforce]
 #
 #   --build           run `npm run tauri build -- --bundles app` first (default: measure the existing bundle)
 #   --runs N          number of timed cold-start launches (default: 5)
+#   --idle-runs N     number of idle-memory launches; the budget uses their median (default: 3)
 #   --idle-seconds S  idle time after first paint before memory is sampled (default: 30)
 #   --purge           run `sudo purge` before every launch to drop the file cache (prompts for a password)
 #   --enforce         exit 1 if any budget is exceeded (default: report only)
@@ -43,24 +44,30 @@
 #   closest to a cold boot, and later runs show the typical relaunch. The budget is
 #   checked against the median of all runs.
 #
-# Idle RSS
-#   After the timed runs, one more launch is left idle for S seconds past its first
-#   paint. The script then adds up the resident set size (`ps -o rss=`) of the app
-#   process and of the WebKit XPC helpers that launchd started on the app's behalf:
-#   com.apple.WebKit.WebContent, .Networking and .GPU, as listed by
-#   `launchctl print pid/<app pid>`. These helpers are not child processes by
-#   parent PID, which is why launchd attributes them. RSS counts shared system
-#   framework pages again in every process, so the sum overstates private memory.
-#   For context, the script also prints the phys_footprint total from footprint(1),
-#   which is the "Memory" figure in Activity Monitor.
+# Idle RAM (the budget's measure, as decided for rlx: phys_footprint)
+#   After the timed runs, the app is launched N more times (default 3). Each launch
+#   is left idle with its default window open for S seconds past first paint. The
+#   script then samples every process that belongs to the app:
+#     - the app process itself;
+#     - the WebKit XPC helpers that launchd started on its behalf:
+#       com.apple.WebKit.WebContent, .Networking and .GPU, as listed by
+#       `launchctl print pid/<app pid>`. They are not child processes by parent PID,
+#       which is why launchd attributes them.
+#   For each process it reads phys_footprint from footprint(1), which is the "Memory"
+#   column in Activity Monitor and is what the 150 MB budget applies to. It also reads
+#   the resident set size (`ps -o rss=`). RSS counts shared system framework pages
+#   again in every process, so the RSS sum overstates memory; it is printed as a
+#   secondary number. The budget is checked against the median of the N
+#   phys_footprint totals.
 
 set -euo pipefail
 
 BUDGET_DMG_MB=25
 BUDGET_COLD_MS=1500
-BUDGET_RSS_MB=150
+BUDGET_RAM_MB=150
 
 runs=5
+idle_runs=3
 idle_seconds=30
 do_build=0
 do_purge=0
@@ -84,6 +91,11 @@ while (($#)); do
     --runs)
       [[ ${2:-} =~ ^[1-9][0-9]*$ ]] || die "--runs needs a positive integer"
       runs=$2
+      shift
+      ;;
+    --idle-runs)
+      [[ ${2:-} =~ ^[1-9][0-9]*$ ]] || die "--idle-runs needs a positive integer"
+      idle_runs=$2
       shift
       ;;
     --idle-seconds)
@@ -184,6 +196,16 @@ wait_for_paint() {
 }
 
 mb() { awk -v b="$1" 'BEGIN { printf "%.2f", b / 1e6 }'; }
+
+# Reads numbers (one per line) on stdin; prints "<min> <median> <max>".
+min_median_max() {
+  sort -n | awk '
+    { v[NR] = $1 }
+    END {
+      m = (NR % 2) ? v[(NR + 1) / 2] : (v[NR / 2] + v[NR / 2 + 1]) / 2
+      printf "%s %s %s\n", v[1], m, v[NR]
+    }'
+}
 verdict() { awk -v v="$1" -v max="$2" 'BEGIN { print (v <= max ? "OK" : "OVER") }'; }
 
 over=0
@@ -229,60 +251,63 @@ for i in $(seq 1 "$runs"); do
   [[ -z $(app_pid) ]] || die "run $i: the app did not quit"
   sleep 1 # let the WebKit helpers exit before the next launch
 done
-read -r cold_min cold_median cold_max < <(sort -n "$WORK/cold.txt" | awk '
-  { v[NR] = $1 }
-  END {
-    m = (NR % 2) ? v[(NR + 1) / 2] : (v[NR / 2] + v[NR / 2 + 1]) / 2
-    printf "%d %.0f %d\n", v[1], m, v[NR]
-  }')
+read -r cold_min cold_median cold_max < <(min_median_max <"$WORK/cold.txt")
+cold_median=$(printf '%.0f' "$cold_median")
 cold_verdict=$(verdict "$cold_median" "$BUDGET_COLD_MS")
 note_verdict "$cold_verdict"
 echo "  median $cold_median ms (min $cold_min, max $cold_max)"
 echo
 
-# 3. Idle RSS --------------------------------------------------------------------
-echo "idle memory: ${idle_seconds} s after first paint"
-launch "$WORK/probe-idle.txt" "$WORK/t0-idle.txt"
-wait_for_paint "$WORK/probe-idle.txt" >/dev/null || die "idle run: no first paint within 30 s"
-sleep "$idle_seconds"
-pid=$(app_pid)
-[[ -n $pid ]] || die "idle run: app exited during the idle period"
+# 3. Idle RAM --------------------------------------------------------------------
+echo "idle memory: $idle_runs run(s), sampled ${idle_seconds} s after first paint"
+: >"$WORK/footprint.txt"
+: >"$WORK/rss.txt"
+for i in $(seq 1 "$idle_runs"); do
+  launch "$WORK/probe-idle-$i.txt" "$WORK/t0-idle-$i.txt"
+  wait_for_paint "$WORK/probe-idle-$i.txt" >/dev/null || die "idle run $i: no first paint within 30 s"
+  sleep "$idle_seconds"
+  pid=$(app_pid)
+  [[ -n $pid ]] || die "idle run $i: app exited during the idle period"
 
-helpers=$(launchctl print "pid/$pid" | awk '
-  /^\tservices = \{/ { inside = 1; next }
-  inside && /^\t\}/ { inside = 0 }
-  inside && $1 > 0 && $3 ~ /^com\.apple\.WebKit\./ { print $1 }')
-[[ -n $helpers ]] || die "idle run: no WebKit helper processes found for pid $pid"
+  helpers=$(launchctl print "pid/$pid" | awk '
+    /^\tservices = \{/ { inside = 1; next }
+    inside && /^\t\}/ { inside = 0 }
+    inside && $1 > 0 && $3 ~ /^com\.apple\.WebKit\./ { print $1 }')
+  [[ -n $helpers ]] || die "idle run $i: no WebKit helper processes found for pid $pid"
 
-rss_total_kb=0
-footprint_total=0
-printf '  %-28s %7s %10s %15s\n' process pid "RSS MB" "footprint MB"
-for p in $pid $helpers; do
-  name=$(basename "$(ps -o comm= -p "$p")")
-  rss_kb=$(ps -o rss= -p "$p" | tr -d ' ')
-  fp=$(footprint --noCategories -f bytes "$p" 2>/dev/null |
-    awk '/phys_footprint:/ { print $2; exit }' || true)
-  rss_total_kb=$((rss_total_kb + rss_kb))
-  if [[ -n $fp ]]; then
+  rss_total=0
+  footprint_total=0
+  ((i == 1)) && printf '  run 1 by process:\n    %-28s %15s %10s\n' process "footprint MB" "RSS MB"
+  for p in $pid $helpers; do
+    name=$(basename "$(ps -o comm= -p "$p")")
+    rss=$(($(ps -o rss= -p "$p" | tr -d ' ') * 1024))
+    fp=$(footprint --noCategories -f bytes "$p" 2>/dev/null | awk '/phys_footprint:/ { print $2; exit }' || true)
+    [[ -n $fp ]] || die "idle run $i: footprint(1) could not read $name ($p)"
+    rss_total=$((rss_total + rss))
     footprint_total=$((footprint_total + fp))
-    fp_mb=$(mb "$fp")
-  else
-    fp_mb="n/a"
-  fi
-  printf '  %-28s %7s %10s %15s\n' "$name" "$p" "$(mb $((rss_kb * 1024)))" "$fp_mb"
+    ((i == 1)) && printf '    %-28s %15s %10s\n' "$name" "$(mb "$fp")" "$(mb "$rss")"
+  done
+  echo "$footprint_total" >>"$WORK/footprint.txt"
+  echo "$rss_total" >>"$WORK/rss.txt"
+  printf '  run %d: phys_footprint %7s MB   RSS %7s MB   (%d processes)\n' \
+    "$i" "$(mb "$footprint_total")" "$(mb "$rss_total")" $((1 + $(wc -w <<<"$helpers")))
+  quit_app
+  [[ -z $(app_pid) ]] || die "idle run $i: the app did not quit"
+  sleep 1
 done
-rss_mb=$(mb $((rss_total_kb * 1024)))
-rss_verdict=$(verdict "$rss_mb" "$BUDGET_RSS_MB")
-note_verdict "$rss_verdict"
-echo "  total RSS $rss_mb MB; total phys_footprint $(mb "$footprint_total") MB"
-quit_app
+read -r _ fp_median _ < <(min_median_max <"$WORK/footprint.txt")
+read -r _ rss_median _ < <(min_median_max <"$WORK/rss.txt")
+ram_mb=$(mb "$fp_median")
+ram_verdict=$(verdict "$ram_mb" "$BUDGET_RAM_MB")
+note_verdict "$ram_verdict"
+echo "  median phys_footprint $ram_mb MB (budget measure); median RSS $(mb "$rss_median") MB (secondary)"
 echo
 
 # Summary --------------------------------------------------------------------------
 echo "summary"
 printf '  %-12s %12s   budget %-10s %s\n' "installer" "$installer_mb MB" "<= $BUDGET_DMG_MB MB" "$installer_verdict ($installer_label)"
 printf '  %-12s %12s   budget %-10s %s\n' "cold start" "$cold_median ms" "<= $BUDGET_COLD_MS ms" "$cold_verdict"
-printf '  %-12s %12s   budget %-10s %s\n' "idle RSS" "$rss_mb MB" "<= $BUDGET_RSS_MB MB" "$rss_verdict"
+printf '  %-12s %12s   budget %-10s %s\n' "idle RAM" "$ram_mb MB" "<= $BUDGET_RAM_MB MB" "$ram_verdict (phys_footprint)"
 
 if ((enforce && over)); then
   exit 1

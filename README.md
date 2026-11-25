@@ -31,7 +31,8 @@ rlx is a [Tauri 2](https://v2.tauri.app) app. The Rust core lives in `src-tauri/
 | `cargo test` / `cargo clippy --all-targets -- -D warnings` | Test and lint the core (run in `src-tauri/`) |
 | `npm run smoke -- <binary>` | Launch a built binary and check that it paints and stays up for 5 s |
 | `npm run icons` | Regenerate the app icons and favicon from `src/assets/rlx-logo.svg` |
-| `scripts/measure-budgets.sh` | macOS: installer size, cold start and idle memory against the budgets |
+| `scripts/measure-budgets.sh` | macOS: installer size, cold start and idle memory (phys_footprint) against the budgets |
+| `node scripts/idle-memory.mjs <binary>` | Windows/Linux: idle memory (private working set / PSS), as CI runs it |
 
 On macOS, local builds produce only the `.app`, and `src-tauri/tauri.macos.conf.json` makes that the default. Building a DMG opens Finder windows, so DMGs, and the Windows and Linux installers, are built in CI and attached to each run as artifacts.
 
