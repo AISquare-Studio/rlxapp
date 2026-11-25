@@ -5,6 +5,13 @@ mod probe;
 use probe::Probe;
 use serde::Serialize;
 
+/// The user-facing app name. Must equal `productName` in tauri.conf.json (checked by a test);
+/// the crate and repository keep the name `rlxapp`.
+pub const PRODUCT_NAME: &str = "rlx";
+
+/// The bundle identifier. Fixed before the first release: it keys app data and Keychain items.
+pub const BUNDLE_ID: &str = "studio.aisquare.rlx";
+
 /// Static facts about the running build, shown on the placeholder screen.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct AppInfo {
@@ -17,7 +24,7 @@ pub struct AppInfo {
 impl AppInfo {
     pub fn current() -> Self {
         Self {
-            name: env!("CARGO_PKG_NAME"),
+            name: PRODUCT_NAME,
             version: env!("CARGO_PKG_VERSION"),
             os: std::env::consts::OS,
             arch: std::env::consts::ARCH,
@@ -55,10 +62,14 @@ pub fn run() {
 mod tests {
     use super::*;
 
+    fn json(text: &str) -> serde_json::Value {
+        serde_json::from_str(text).expect("valid JSON")
+    }
+
     #[test]
     fn app_info_matches_the_crate_and_host() {
         let info = AppInfo::current();
-        assert_eq!(info.name, "rlxapp");
+        assert_eq!(info.name, "rlx");
         assert_eq!(info.version, env!("CARGO_PKG_VERSION"));
         assert_eq!(info.os, std::env::consts::OS);
         assert_eq!(info.arch, std::env::consts::ARCH);
@@ -70,5 +81,20 @@ mod tests {
         let mut keys: Vec<_> = json.as_object().unwrap().keys().cloned().collect();
         keys.sort();
         assert_eq!(keys, ["arch", "name", "os", "version"]);
+    }
+
+    #[test]
+    fn tauri_config_uses_the_product_name_and_bundle_id() {
+        let config = json(include_str!("../tauri.conf.json"));
+        assert_eq!(config["productName"], PRODUCT_NAME);
+        assert_eq!(config["identifier"], BUNDLE_ID);
+        assert_eq!(config["app"]["windows"][0]["title"], PRODUCT_NAME);
+    }
+
+    #[test]
+    fn crate_version_matches_package_json() {
+        // tauri.conf.json takes its version from package.json; keep Cargo.toml in step.
+        let package = json(include_str!("../../package.json"));
+        assert_eq!(package["version"], env!("CARGO_PKG_VERSION"));
     }
 }

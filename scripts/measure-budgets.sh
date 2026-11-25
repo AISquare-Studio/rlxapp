@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 #
-# measure-budgets.sh: measure rlxapp against its size and speed budgets (macOS only).
+# measure-budgets.sh: measure rlx (the app built from this repo) against its size and speed budgets (macOS only).
 #
 # Usage:
 #   scripts/measure-budgets.sh [--build] [--runs N] [--idle-seconds S] [--purge] [--enforce]
 #
-#   --build           run `npm run tauri build` first (default: measure the existing bundle)
+#   --build           run `npm run tauri build -- --bundles app` first (default: measure the existing bundle)
 #   --runs N          number of timed cold-start launches (default: 5)
 #   --idle-seconds S  idle time after first paint before memory is sampled (default: 30)
 #   --purge           run `sudo purge` before every launch to drop the file cache (prompts for a password)
@@ -17,13 +17,20 @@
 # Method
 # ------
 # Installer size
-#   Byte size of the newest src-tauri/target/release/bundle/dmg/*.dmg, the unsigned
-#   installer that `npm run tauri build` produces.
+#   The installer is the unsigned .dmg. DMGs are built only in CI, because building
+#   one opens Finder windows. Local builds use `--bundles app`, so locally the
+#   script reports:
+#     - the .app bundle size (the sum of its file sizes);
+#     - a compressed estimate: the size of `ditto -c -k --keepParent rlx.app` (a
+#       zip). The DMG's zlib compression lands close to it.
+#   When a rlx_*.dmg newer than the .app is present (the macOS CI job builds one
+#   first), its byte size is reported too. The budget is then checked against the
+#   DMG; otherwise it is checked against the zip estimate.
 #
 # Cold start: launch to first window paint
 #   Every run starts with the app not running. The app is launched the way Finder
 #   launches it, through LaunchServices:
-#     open -n -F --env RLXAPP_STARTUP_PROBE=<file> rlxapp.app
+#     open -n -F --env RLXAPP_STARTUP_PROBE=<file> rlx.app
 #   t0 is the wall-clock time that perl records immediately before it execs `open`.
 #   The web UI waits for the browser's First Contentful Paint entry, which is the first
 #   frame showing the placeholder screen. It converts that entry to wall-clock time
@@ -92,35 +99,53 @@ done
 
 [[ $(uname -s) == Darwin ]] || die "macOS only"
 
-ROOT=$(cd "$(dirname "$0")/.." && pwd)
+# Physical path (-P), so BIN matches the executable path that ps reports.
+ROOT=$(cd "$(dirname "$0")/.." && pwd -P)
 BUNDLE_DIR="$ROOT/src-tauri/target/release/bundle"
-APP="$BUNDLE_DIR/macos/rlxapp.app"
-BIN="$APP/Contents/MacOS/rlxapp"
+APP="$BUNDLE_DIR/macos/rlx.app"
 
 if ((do_build)); then
-  (cd "$ROOT" && npm run tauri build)
+  (cd "$ROOT" && npm run tauri build -- --bundles app)
 fi
 
-DMG=$(ls -t "$BUNDLE_DIR"/dmg/*.dmg 2>/dev/null | head -n 1 || true)
-[[ -n $DMG ]] || die "no .dmg in $BUNDLE_DIR/dmg; run 'npm run tauri build' or pass --build"
-[[ -x $BIN ]] || die "no app binary at $BIN; run 'npm run tauri build' or pass --build"
+[[ -f $APP/Contents/Info.plist ]] || die "no $APP; run 'npm run tauri build -- --bundles app' or pass --build"
+BIN="$APP/Contents/MacOS/$(plutil -extract CFBundleExecutable raw "$APP/Contents/Info.plist")"
+[[ -x $BIN ]] || die "no app binary at $BIN"
+
+# A DMG counts only if it was built from this .app (CI builds both in one run).
+DMG=""
+for candidate in $(ls -t "$BUNDLE_DIR"/dmg/rlx_*.dmg 2>/dev/null || true); do
+  [[ $candidate -nt $BIN ]] && DMG=$candidate
+  break
+done
 
 WORK=$(mktemp -d -t rlxapp-budgets)
 
+# PIDs of running instances of this exact binary. This is a plain string compare on
+# ps's executable path: `pgrep -f` applies a regex to every process's arguments and
+# fails on bytes that are invalid in the current locale.
+app_pids() {
+  ps -axo pid=,comm= | LC_ALL=C awk -v bin="$BIN" '{
+    pid = $1
+    sub(/^ *[0-9]+ /, "")
+    if ($0 == bin) print pid
+  }'
+}
+
 app_pid() {
-  pgrep -f "^$BIN" | head -n 1 || true
+  app_pids | head -n 1
 }
 
 quit_app() {
   local pid
-  pid=$(app_pid)
-  [[ -n $pid ]] || return 0
-  kill "$pid" 2>/dev/null || true
-  for _ in $(seq 1 100); do
-    kill -0 "$pid" 2>/dev/null || return 0
-    sleep 0.1
+  for pid in $(app_pids); do
+    kill "$pid" 2>/dev/null || true
+    for _ in $(seq 1 100); do
+      kill -0 "$pid" 2>/dev/null || break
+      sleep 0.1
+    done
+    kill -9 "$pid" 2>/dev/null || true
   done
-  kill -9 "$pid" 2>/dev/null || true
 }
 
 cleanup() {
@@ -129,7 +154,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
-[[ -z $(app_pid) ]] || die "rlxapp is already running from $APP; quit it first"
+[[ -z $(app_pid) ]] || die "rlx is already running from $APP; quit it first"
 
 # Launches the app through LaunchServices with the startup probe enabled.
 # Writes the launch wall-clock time (epoch ms) to $2.
@@ -164,17 +189,30 @@ verdict() { awk -v v="$1" -v max="$2" 'BEGIN { print (v <= max ? "OK" : "OVER") 
 over=0
 note_verdict() { [[ $1 == OK ]] || over=1; }
 
-echo "rlxapp budgets"
+echo "rlx budgets"
 echo "  host:  $(sysctl -n machdep.cpu.brand_string), macOS $(sw_vers -productVersion) ($(uname -m))"
 echo "  app:   ${APP#"$ROOT"/}"
 echo
 
 # 1. Installer size --------------------------------------------------------------
-dmg_bytes=$(stat -f %z "$DMG")
-dmg_mb=$(mb "$dmg_bytes")
-dmg_verdict=$(verdict "$dmg_mb" "$BUDGET_DMG_MB")
-note_verdict "$dmg_verdict"
-echo "installer: $(basename "$DMG") = $dmg_mb MB ($dmg_bytes bytes)"
+app_bytes=$(find "$APP" -type f -exec stat -f %z {} + | awk '{ s += $1 } END { print s + 0 }')
+ditto -c -k --keepParent "$APP" "$WORK/rlx.zip"
+zip_bytes=$(stat -f %z "$WORK/rlx.zip")
+echo "installer:"
+echo "  rlx.app bundle      $(mb "$app_bytes") MB ($app_bytes bytes)"
+echo "  zip estimate        $(mb "$zip_bytes") MB ($zip_bytes bytes)"
+if [[ -n $DMG ]]; then
+  dmg_bytes=$(stat -f %z "$DMG")
+  echo "  $(basename "$DMG")  $(mb "$dmg_bytes") MB ($dmg_bytes bytes)"
+  installer_label="dmg"
+  installer_mb=$(mb "$dmg_bytes")
+else
+  echo "  dmg                 not built locally (DMGs are CI-only; see the macOS CI job)"
+  installer_label="zip est."
+  installer_mb=$(mb "$zip_bytes")
+fi
+installer_verdict=$(verdict "$installer_mb" "$BUDGET_DMG_MB")
+note_verdict "$installer_verdict"
 echo
 
 # 2. Cold start ------------------------------------------------------------------
@@ -188,6 +226,7 @@ for i in $(seq 1 "$runs"); do
   echo "$ms" >>"$WORK/cold.txt"
   printf '  run %d: %5d ms  (%s)\n' "$i" "$ms" "$source"
   quit_app
+  [[ -z $(app_pid) ]] || die "run $i: the app did not quit"
   sleep 1 # let the WebKit helpers exit before the next launch
 done
 read -r cold_min cold_median cold_max < <(sort -n "$WORK/cold.txt" | awk '
@@ -241,7 +280,7 @@ echo
 
 # Summary --------------------------------------------------------------------------
 echo "summary"
-printf '  %-12s %12s   budget %-10s %s\n' installer "$dmg_mb MB" "<= $BUDGET_DMG_MB MB" "$dmg_verdict"
+printf '  %-12s %12s   budget %-10s %s\n' "installer" "$installer_mb MB" "<= $BUDGET_DMG_MB MB" "$installer_verdict ($installer_label)"
 printf '  %-12s %12s   budget %-10s %s\n' "cold start" "$cold_median ms" "<= $BUDGET_COLD_MS ms" "$cold_verdict"
 printf '  %-12s %12s   budget %-10s %s\n' "idle RSS" "$rss_mb MB" "<= $BUDGET_RSS_MB MB" "$rss_verdict"
 

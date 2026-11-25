@@ -45,7 +45,7 @@ export const browserPlatform: Platform = {
   runtime: "browser",
   appInfo() {
     return Promise.resolve({
-      name: "rlxapp",
+      name: "rlx",
       version: __APP_VERSION__,
       os: "browser",
       arch: "n/a",

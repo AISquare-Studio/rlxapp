@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { RlxMark } from "./brand/RlxMark.tsx";
 import type { AppInfo, Platform } from "./platform/index.ts";
 import "./App.css";
 
@@ -26,13 +27,18 @@ export function App({ platform }: AppProps) {
   }, [platform]);
 
   return (
-    <main className="placeholder">
-      <h1>rlxapp</h1>
-      <p className="tagline">Coming soon.</p>
-      <p className="meta" data-testid="app-meta">
-        {info ? describe(info) : " "}
-      </p>
-    </main>
+    <div className="app">
+      <header className="app-header">
+        <RlxMark className="app-header__mark" />
+      </header>
+      <main className="placeholder">
+        <h1>rlx</h1>
+        <p className="tagline">Coming soon.</p>
+        <p className="meta" data-testid="app-meta">
+          {info ? describe(info) : " "}
+        </p>
+      </main>
+    </div>
   );
 }
 

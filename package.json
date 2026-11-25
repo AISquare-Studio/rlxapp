@@ -15,7 +15,8 @@
     "lint": "oxlint --deny-warnings",
     "typecheck": "tsc -b",
     "test": "vitest run",
-    "smoke": "node scripts/smoke-test.mjs"
+    "smoke": "node scripts/smoke-test.mjs",
+    "icons": "node scripts/gen-icons.mjs"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.12.5",

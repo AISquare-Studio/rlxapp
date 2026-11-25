@@ -1,5 +1,6 @@
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
+import "./theme/tokens.css";
 import { App } from "./App.tsx";
 import { whenFirstPaint } from "./platform/firstPaint.ts";
 import { detectPlatform } from "./platform/index.ts";

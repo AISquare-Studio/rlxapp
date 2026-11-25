@@ -18,7 +18,7 @@ describe("detectPlatform", () => {
 
     expect(platform).toBe(browserPlatform);
     await expect(platform.appInfo()).resolves.toEqual({
-      name: "rlxapp",
+      name: "rlx",
       version: __APP_VERSION__,
       os: "browser",
       arch: "n/a",
@@ -40,13 +40,13 @@ describe("nativePlatform", () => {
     mockIPC((cmd) => {
       calls.push(cmd);
       if (cmd === "app_info") {
-        return { name: "rlxapp", version: "0.1.0", os: "linux", arch: "x86_64" };
+        return { name: "rlx", version: "0.1.0", os: "linux", arch: "x86_64" };
       }
       throw new Error(`unexpected command ${cmd}`);
     });
 
     await expect(nativePlatform.appInfo()).resolves.toEqual({
-      name: "rlxapp",
+      name: "rlx",
       version: "0.1.0",
       os: "linux",
       arch: "x86_64",

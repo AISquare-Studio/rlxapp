@@ -1,22 +1,8 @@
 :root {
-  font-family:
-    system-ui,
-    -apple-system,
-    "Segoe UI",
-    Roboto,
-    "Helvetica Neue",
-    sans-serif;
-  color-scheme: light dark;
-  color: #1d1d1f;
-  background-color: #f5f5f7;
+  font-family: var(--rlx-font-sans);
+  color: var(--rlx-foreground);
+  background-color: var(--rlx-background);
   -webkit-font-smoothing: antialiased;
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    color: #f5f5f7;
-    background-color: #1d1d1f;
-  }
 }
 
 html,
@@ -26,16 +12,36 @@ body,
   margin: 0;
 }
 
-.placeholder {
+.app {
   height: 100%;
+  display: flex;
+  flex-direction: column;
+  user-select: none;
+  -webkit-user-select: none;
+  cursor: default;
+}
+
+.app-header {
+  display: flex;
+  align-items: center;
+  padding: var(--rlx-space-3) var(--rlx-space-4);
+}
+
+.app-header__mark {
+  height: 22px;
+  width: auto;
+  color: var(--rlx-mark);
+}
+
+.placeholder {
+  flex: 1;
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 0.5rem;
-  user-select: none;
-  -webkit-user-select: none;
-  cursor: default;
+  gap: var(--rlx-space-2);
+  /* Optically centre in the window, not below the header. */
+  padding-bottom: 46px;
 }
 
 .placeholder h1 {
@@ -43,17 +49,17 @@ body,
   font-size: 3rem;
   font-weight: 700;
   letter-spacing: -0.02em;
+  color: var(--rlx-mark);
 }
 
 .placeholder .tagline {
   margin: 0;
   font-size: 1.125rem;
-  opacity: 0.8;
 }
 
 .placeholder .meta {
-  margin: 1.5rem 0 0;
+  margin: var(--rlx-space-6) 0 0;
   font-size: 0.8125rem;
   font-variant-numeric: tabular-nums;
-  opacity: 0.5;
+  opacity: 0.6;
 }
