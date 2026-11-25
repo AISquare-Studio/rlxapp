@@ -17,7 +17,7 @@
     "test": "vitest run",
     "smoke": "node scripts/smoke-test.mjs",
     "icons": "node scripts/gen-icons.mjs",
-    "e2e:build": "tauri build --debug --no-bundle --features e2e",
+    "e2e:build": "tauri build --debug --no-bundle --features e2e --config src-tauri/tauri.e2e.conf.json",
     "e2e": "node e2e/native/run.mjs"
   },
   "dependencies": {

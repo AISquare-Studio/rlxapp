@@ -55,17 +55,21 @@ if (!values.only || values.only === "screens") {
 }
 process.exit(failed ? 1 : 0);
 
+/** The WebView2 debugging port the test build opens (src-tauri/tauri.e2e.conf.json). */
+const DEVTOOLS_PORT = 9222;
+
 /**
- * Windows: msedgedriver's own launch of a WebView2 app waits for a DevToolsActivePort file
- * in the user-data folder it asked for. The app's WebView2 uses its own folder, so the
- * session times out. Microsoft's documented alternative: start the app with a remote
- * debugging port and attach msedgedriver to it (ms:edgeOptions.debuggerAddress).
+ * Windows: msedgedriver can't launch the app itself. It passes its remote-debugging
+ * arguments through WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS, which WebView2 ignores because the
+ * app (wry) always sets its own browser arguments. CI showed both: msedgedriver timed out on
+ * DevToolsActivePort, and an app started with that variable never opened the port. So the
+ * test build asks for the port in its own arguments (the tauri.e2e.conf.json overlay). This
+ * starts it, and msedgedriver attaches through tauri-driver (ms:edgeOptions.debuggerAddress),
+ * which is Microsoft's documented way to automate a running WebView2 app.
  */
-async function launchForAttach(app, env, port) {
-  const child = spawn(app, [], {
-    env: { ...env, WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS: `--remote-debugging-port=${port}` },
-    stdio: ["ignore", "pipe", "pipe"],
-  });
+async function launchForAttach(app, env) {
+  const port = DEVTOOLS_PORT;
+  const child = spawn(app, [], { env, stdio: ["ignore", "pipe", "pipe"] });
   let exited = false;
   let exitCode = null;
   let output = "";
@@ -85,10 +89,11 @@ async function launchForAttach(app, env, port) {
       // not up yet
     }
     if (exited || Date.now() > deadline) {
+      const how = exited ? `the app exited on its own: ${exitCode}` : "the app was still running";
       await stopTree(child, () => exited);
       const portFile = join(process.env.LOCALAPPDATA ?? "", "studio.aisquare.rlx", "EBWebView", "DevToolsActivePort");
       throw new Error(
-        `WebView2 never opened remote debugging on port ${port}${exited ? ` (the app exited: ${exitCode})` : ""}; ` +
+        `WebView2 never opened remote debugging on port ${port} (${how}); ` +
           `the app's own DevToolsActivePort ${existsSync(portFile) ? "exists" : "doesn't exist"}; ` +
           `app output: ${output.trim().replaceAll(/\s+/g, " ") || "none"}`,
       );
@@ -127,7 +132,7 @@ async function runScreens() {
       try {
         // A fresh app per check, so one check's state never leaks into the next.
         if (os === "windows") {
-          attached = await launchForAttach(binary, env, 9222 + results.length);
+          attached = await launchForAttach(binary, env);
           session = await Session.withCapabilities(driver.base, {
             browserName: "webview2",
             "ms:edgeOptions": { debuggerAddress: `127.0.0.1:${attached.port}` },
