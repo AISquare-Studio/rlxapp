@@ -4,6 +4,7 @@ import { PriorityCard } from "../chat/Cards.tsx";
 import { useNow } from "../engine/hooks.ts";
 import { MANAGER_ID, agentStatus, scheduleLabel, wakeLabel } from "../state/agents.ts";
 import { useApp } from "../state/context.ts";
+import { MoreMenu } from "../ui/MoreMenu.tsx";
 import { useOverlayCount } from "../ui/overlays.ts";
 import type { WidgetInstance, WidgetType } from "../state/model.ts";
 import { Icon } from "../ui/Icon.tsx";
@@ -59,10 +60,10 @@ function StartOfDay() {
       <section className="briefing briefing--empty" aria-label="Start of day">
         <div>
           <h2>Start of day</h2>
-          <p className="muted">Get one prioritized list each morning from your Meetings, Gmail and Slack agents. Ask the manager to set it up.</p>
+          <p className="muted">One calm list each morning.</p>
         </div>
-        <button type="button" className="button button--primary" onClick={() => navigate({ name: "channel", id: MANAGER_ID })}>
-          <Icon name="sparkle" size={16} /> Set it up with the manager
+        <button type="button" className="button" onClick={() => navigate({ name: "channel", id: MANAGER_ID })}>
+          <Icon name="sparkle" size={16} /> Set it up
         </button>
       </section>
     );
@@ -73,15 +74,17 @@ function StartOfDay() {
       <div className="briefing__head">
         <div>
           <h2>{agent.name}</h2>
-          <p className="muted" data-testid="briefing-meta">
+          <p className="muted reveal-host" data-testid="briefing-meta" tabIndex={0}>
             {status.kind === "running"
               ? "Running now…"
               : briefing
                 ? `Updated ${new Date(briefing.at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`
                 : "Hasn't run yet"}
-            {" · "}
-            {scheduleLabel(agent.schedule)}
-            {status.next !== undefined ? ` · next ${wakeLabel(status.next, now)}` : ""}
+            <span className="reveal">
+              {" · "}
+              {scheduleLabel(agent.schedule)}
+              {status.next !== undefined ? ` · next ${wakeLabel(status.next, now)}` : ""}
+            </span>
           </p>
         </div>
         <div className="button-row">
@@ -90,15 +93,16 @@ function StartOfDay() {
               <Icon name="play" size={14} /> Simulate 9:00 <span className="demo-tag">demo</span>
             </button>
           ) : null}
-          <button type="button" className="button button--sm" disabled={status.kind === "running" || status.kind === "paused"} onClick={() => void wake(agent)}>
-            Wake now
-          </button>
-          <button type="button" className="button button--sm" onClick={() => navigate({ name: "channel", id: agent.id })}>
-            Open channel
-          </button>
+          <MoreMenu
+            label={`More actions for ${agent.name}`}
+            items={[
+              { label: "Wake now", disabled: status.kind === "running" || status.kind === "paused", onSelect: () => void wake(agent) },
+              { label: "Open channel", onSelect: () => navigate({ name: "channel", id: agent.id }) },
+            ]}
+          />
         </div>
       </div>
-      {briefing ? <PriorityCard card={briefing.card} /> : <p className="muted">It posts Do now, Today and Waiting on you here after its next run.</p>}
+      {briefing ? <PriorityCard card={briefing.card} /> : <p className="muted empty-quiet">Nothing yet. It fills in after its next run.</p>}
     </section>
   );
 }
@@ -133,13 +137,9 @@ export function Home() {
       <div className="screen-header">
         <div>
           <h1>Home</h1>
-          <p className="muted">Your dashboard. Your agents keep it up to date while they sleep between runs.</p>
         </div>
         <div className="button-row">
-          <button type="button" className="button" onClick={() => setAsking(true)}>
-            <Icon name="sparkle" size={16} /> Ask {agentName} to make a widget
-          </button>
-          <button type="button" className="button button--primary" onClick={() => setPicker(true)}>
+          <button type="button" className="button" onClick={() => setPicker(true)}>
             <Icon name="plus" size={16} /> Add widget
           </button>
         </div>

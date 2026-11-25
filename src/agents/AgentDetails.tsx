@@ -6,7 +6,9 @@ import { useApp } from "../state/context.ts";
 import type { Proposal } from "../state/model.ts";
 import { Avatar } from "../ui/Avatar.tsx";
 import { Icon } from "../ui/Icon.tsx";
+import type { MenuItem } from "../ui/MoreMenu.tsx";
 import { Modal } from "../ui/Modal.tsx";
+import { MoreMenu } from "../ui/MoreMenu.tsx";
 import { ago } from "../widgets/time.ts";
 import { useAgents } from "./useAgents.ts";
 
@@ -35,7 +37,7 @@ export function LastRun({ agent, now }: { agent: Agent; now: number }) {
 }
 
 /** Wake now / Pause (Resume) / Edit. */
-export function AgentActions({ agent, compact }: { agent: Agent; compact?: boolean }) {
+export function AgentActions({ agent, compact, extra = [] }: { agent: Agent; compact?: boolean; extra?: MenuItem[] }) {
   const { wake, setPaused, running, agents } = useAgents();
   const { dispatch, toast } = useApp();
   const [editing, setEditing] = useState(false);
@@ -46,12 +48,14 @@ export function AgentActions({ agent, compact }: { agent: Agent; compact?: boole
       <button type="button" className={`button${size}`} disabled={isRunning || agent.state === "paused"} onClick={() => void wake(agent)} aria-label={`Wake ${agent.name} now`}>
         <Icon name="play" size={14} /> Wake now
       </button>
-      <button type="button" className={`button${size}`} onClick={() => setPaused(agent, agent.state !== "paused")} aria-label={`${agent.state === "paused" ? "Resume" : "Pause"} ${agent.name}`}>
-        <Icon name={agent.state === "paused" ? "play" : "pause"} size={14} /> {agent.state === "paused" ? "Resume" : "Pause"}
-      </button>
-      <button type="button" className={`button${size}`} onClick={() => setEditing(true)} aria-label={`Edit ${agent.name}`}>
-        <Icon name="gear" size={14} /> Edit
-      </button>
+      <MoreMenu
+        label={`More actions for ${agent.name}`}
+        items={[
+          { label: agent.state === "paused" ? "Resume" : "Pause", onSelect: () => setPaused(agent, agent.state !== "paused") },
+          { label: "Edit", onSelect: () => setEditing(true) },
+          ...extra,
+        ]}
+      />
       {editing ? (
         <EditAgentDialog
           agent={agent}
@@ -136,7 +140,6 @@ export function AgentDetails({ agent }: { agent: Agent }) {
         <dt>Output</dt>
         <dd>{agent.outputs.map((o) => OUTPUT_LABEL[o]).join(", ")}</dd>
       </dl>
-      <AgentActions agent={agent} compact />
     </div>
   );
 }

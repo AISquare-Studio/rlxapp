@@ -1,4 +1,5 @@
-import { USER_CONNECTORS, type AgentOutput, type Schedule } from "../state/agents.ts";
+import type { ReactNode } from "react";
+import { USER_CONNECTORS, scheduleLabel, type AgentOutput, type Schedule } from "../state/agents.ts";
 import type { Proposal } from "../state/model.ts";
 import { Icon } from "../ui/Icon.tsx";
 
@@ -8,8 +9,22 @@ const OUTPUTS: { id: AgentOutput; label: string }[] = [
   { id: "dashboard", label: "Home dashboard section" },
 ];
 
-/** Edits an agent's setup: name, connectors (chips, never a fixed list), schedule, silent/loud and output. */
-export function AgentEditor({ value, onChange, idPrefix }: { value: Proposal; onChange: (next: Proposal) => void; idPrefix: string }) {
+/** The schedule, mode and outputs behind a one-line summary (calm: less by default). */
+function Fold({ fold, summary, children }: { fold: boolean; summary: string; children: ReactNode }) {
+  if (!fold) return <>{children}</>;
+  return (
+    <details className="fold">
+      <summary>{summary}</summary>
+      <div className="agent-editor">{children}</div>
+    </details>
+  );
+}
+
+/**
+ * Edits an agent's setup: name, connectors (chips, never a fixed list), schedule, silent/loud and
+ * output. With `fold`, the schedule, mode and outputs sit behind a summary line.
+ */
+export function AgentEditor({ value, onChange, idPrefix, fold = false }: { value: Proposal; onChange: (next: Proposal) => void; idPrefix: string; fold?: boolean }) {
   const set = (patch: Partial<Proposal>) => onChange({ ...value, ...patch });
   const setSchedule = (patch: Partial<Schedule>) => set({ schedule: { ...value.schedule, ...patch } });
   const available = USER_CONNECTORS.filter((c) => !value.connectors.includes(c));
@@ -54,6 +69,10 @@ export function AgentEditor({ value, onChange, idPrefix }: { value: Proposal; on
           </label>
         ) : null}
       </fieldset>
+      <Fold
+        fold={fold}
+        summary={`${scheduleLabel(value.schedule)} · ${value.mode === "loud" ? "Loud" : "Silent"} · ${value.outputs.map((o) => OUTPUTS.find((x) => x.id === o)?.label ?? o).join(", ") || "No output"}`}
+      >
       <fieldset className="field-group">
         <legend>Schedule</legend>
         <div className="inline-fields">
@@ -111,6 +130,7 @@ export function AgentEditor({ value, onChange, idPrefix }: { value: Proposal; on
           </label>
         ))}
       </fieldset>
+      </Fold>
     </div>
   );
 }

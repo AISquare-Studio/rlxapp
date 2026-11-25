@@ -33,7 +33,8 @@ for (const theme of ["dark", "light"] as const) {
     await page.getByRole("button", { name: "Agents", exact: true }).click();
     await page.waitForTimeout(300);
     await shot(page, `${label}-06-agents`);
-    await page.getByRole("button", { name: "Edit Meetings agent" }).click();
+    await page.getByRole("button", { name: "More actions for Meetings agent" }).click();
+    await page.getByRole("menuitem", { name: "Edit" }).click();
     await shot(page, `${label}-07-agent-edit`);
     await page.getByRole("button", { name: "Cancel" }).click();
 
@@ -86,6 +87,8 @@ for (const theme of ["dark", "light"] as const) {
     await shot(page, `${label}-20-settings`);
     const slack = page.getByRole("group", { name: "Slack" });
     await slack.getByText("Auto", { exact: true }).click();
+    await page.getByRole("dialog", { name: "Turn on Auto for Slack?" }).waitFor();
+    await page.waitForTimeout(300);
     await shot(page, `${label}-21-settings-auto-risk`);
     await page.getByRole("button", { name: "Keep drafts" }).click();
 

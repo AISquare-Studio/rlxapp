@@ -4,6 +4,7 @@ import { useApp } from "../state/context.ts";
 import type { Draft, StandingApproval } from "../state/model.ts";
 import { Icon } from "../ui/Icon.tsx";
 import { Modal } from "../ui/Modal.tsx";
+import { MoreMenu } from "../ui/MoreMenu.tsx";
 
 const TABS = [
   { id: "drafts", label: "Drafts" },
@@ -66,14 +67,21 @@ function Drafts() {
   return (
     <ul className="card-list" data-testid="drafts">
       {state.drafts.map((draft) => (
-        <li key={draft.id} className="card draft">
+        <li key={draft.id} className="card draft reveal-host">
           <div className="card__head">
             <span className="badge">{draft.connector.replace(/^claude\.ai /, "")}</span>
             <strong>To {draft.destination}</strong>
-            <span className="muted">· {ORIGIN[draft.origin]} · {time(draft.createdAt)}</span>
+            <span className="muted reveal">
+              {ORIGIN[draft.origin]} · {time(draft.createdAt)}
+            </span>
           </div>
           {draft.subject ? <div className="draft__subject">{draft.subject}</div> : null}
-          <p className="muted draft__context">{draft.context}</p>
+          {draft.context ? (
+            <details className="fold">
+              <summary>Why this draft</summary>
+              <p className="muted draft__context">{draft.context}</p>
+            </details>
+          ) : null}
           {editing === draft.id ? (
             <label className="field">
               <span>Message</span>
@@ -114,26 +122,25 @@ function Drafts() {
                 >
                   <Icon name="send" size={16} /> Approve and send
                 </button>
-                <button
-                  type="button"
-                  className="button"
-                  onClick={() => {
-                    setEditing(draft.id);
-                    setText(draft.body);
-                  }}
-                >
-                  Edit
-                </button>
-                <button
-                  type="button"
-                  className="button button--quiet"
-                  onClick={() => {
-                    dispatch({ type: "draft-discard", id: draft.id });
-                    toast("Draft discarded", "info");
-                  }}
-                >
-                  Discard
-                </button>
+                <MoreMenu
+                  label={`More actions for the draft to ${draft.destination}`}
+                  items={[
+                    {
+                      label: "Edit",
+                      onSelect: () => {
+                        setEditing(draft.id);
+                        setText(draft.body);
+                      },
+                    },
+                    {
+                      label: "Discard",
+                      onSelect: () => {
+                        dispatch({ type: "draft-discard", id: draft.id });
+                        toast("Draft discarded", "info");
+                      },
+                    },
+                  ]}
+                />
               </>
             )}
           </div>

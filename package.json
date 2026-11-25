@@ -12,7 +12,7 @@
     "build": "tsc -b && vite build",
     "preview": "vite preview",
     "tauri": "tauri",
-    "lint": "oxlint --deny-warnings",
+    "lint": "oxlint --deny-warnings && node scripts/lint-calm.mjs",
     "typecheck": "tsc -b",
     "test": "vitest run",
     "smoke": "node scripts/smoke-test.mjs",

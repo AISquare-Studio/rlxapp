@@ -112,21 +112,50 @@
   --rlx-border: #D9D2BD;
 }
 
-/* Theme-independent tokens. */
+/*
+ * Theme-independent tokens, calm first (rule-calm-design): an 8 px spacing grid, ONE border width
+ * and ONE border colour, a small radius set, three text sizes, muted secondary text, and a subtle
+ * selection (a low-alpha accent tint and border). Components use these only; `npm run lint`
+ * (src/theme/calmLint.ts) fails on anything else.
+ */
 :root {
   --rlx-font-sans: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", sans-serif;
   --rlx-font-mono: ui-monospace, "JetBrains Mono", "SF Mono", Menlo, Consolas, monospace;
-  --rlx-radius-sm: 6px;
-  --rlx-radius-md: 10px;
+  --rlx-radius-xs: 4px;
+  --rlx-radius-sm: 8px;
+  --rlx-radius-md: 12px;
   --rlx-radius-lg: 16px;
+  --rlx-radius-pill: 999px;
   --rlx-space-1: 4px;
   --rlx-space-2: 8px;
   --rlx-space-3: 12px;
   --rlx-space-4: 16px;
   --rlx-space-6: 24px;
+  --rlx-space-8: 32px;
+  --rlx-space-12: 48px;
   --rlx-font-size: 14px;
+  --rlx-text-sm: calc(var(--rlx-font-size) * 0.86);
+  --rlx-text-md: var(--rlx-font-size);
+  --rlx-text-lg: calc(var(--rlx-font-size) * 1.29);
+  /* Widget numerals only (clock, timer, pomodoro). */
+  --rlx-text-display: calc(var(--rlx-font-size) * 2.6);
   --rlx-row: 36px;
   --rlx-motion: 160ms;
+
+  --rlx-border-width: 1px;
+  --rlx-border-color: var(--rlx-border);
+  /* Hover and selection: a slightly stronger neutral, or the accent at low alpha. Never a bar. */
+  --rlx-border-strong: color-mix(in srgb, var(--rlx-border) 55%, var(--rlx-muted));
+  --rlx-hover-bg: color-mix(in srgb, var(--rlx-foreground) 5%, transparent);
+  --rlx-selection-bg: color-mix(in srgb, var(--rlx-accent) 12%, transparent);
+  --rlx-selection-border: color-mix(in srgb, var(--rlx-accent) 45%, var(--rlx-border));
+  --rlx-chip-bg: color-mix(in srgb, var(--rlx-foreground) 7%, transparent);
+  --rlx-focus-width: 2px;
+  --rlx-focus-color: var(--rlx-primary);
+  --rlx-scrim: rgb(0 0 0 / 0.45);
+  --rlx-shadow-overlay: 0 12px 32px rgb(0 0 0 / 0.22);
+  --rlx-terminal-bg: #0B0C0E;
+  --rlx-terminal-fg: #E6E6E6;
 }
 
 /* Density: three levels, set with <html data-density="…">. */
@@ -136,6 +165,8 @@
   --rlx-space-3: 8px;
   --rlx-space-4: 11px;
   --rlx-space-6: 16px;
+  --rlx-space-8: 22px;
+  --rlx-space-12: 32px;
   --rlx-font-size: 13px;
   --rlx-row: 28px;
 }
@@ -146,6 +177,8 @@
   --rlx-space-3: 15px;
   --rlx-space-4: 20px;
   --rlx-space-6: 30px;
+  --rlx-space-8: 40px;
+  --rlx-space-12: 60px;
   --rlx-font-size: 15px;
   --rlx-row: 44px;
 }

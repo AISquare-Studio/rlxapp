@@ -62,6 +62,7 @@ describe("Slack digest", () => {
     const meta = await screen.findByTestId("slack-meta");
     await screen.findByText(/Priya Shah/);
     expect(meta.textContent).toBe("checked just now · model turn: Claude reviewed 3 new · every 15 min");
+    expect(meta.querySelector(".reveal")?.textContent).toBe(" · every 15 min");
     const items = document.querySelectorAll(".feed__item--needs-you");
     expect(items.length).toBe(3);
     for (const item of items) {
@@ -88,15 +89,19 @@ describe("Gmail dashboard", () => {
     const engine = new FakeEngine({ stepMs: 20, seed: false });
     wrap(<SlackDigestWidget settingsOpen={false} />, engine);
     const turn = () => screen.getByTestId("slack-turn").textContent;
+    const refreshNow = () => {
+      fireEvent.click(screen.getByRole("button", { name: "More actions for Slack digest" }));
+      fireEvent.click(screen.getByRole("menuitem", { name: "Refresh now" }));
+    };
     await screen.findByText(/Priya Shah/);
     expect(turn()).toBe("model turn: Claude reviewed 3 new");
-    fireEvent.click(screen.getByRole("button", { name: /Refresh now/ }));
+    refreshNow();
     await vi.waitFor(() => expect(turn()).toBe("nothing new, no Claude usage"));
-    fireEvent.click(screen.getByRole("button", { name: /Refresh now/ }));
-    await vi.waitFor(() => expect((screen.getByRole("button", { name: /Refresh now/ }) as HTMLButtonElement).disabled).toBe(false));
+    refreshNow();
+    await vi.waitFor(() => expect(screen.getByTestId("slack-meta").textContent).toMatch(/^checked/));
     expect(turn()).toBe("nothing new, no Claude usage");
     engine.simulateNewSlack(3);
-    fireEvent.click(screen.getByRole("button", { name: /Refresh now/ }));
+    refreshNow();
     await vi.waitFor(() => expect(turn()).toBe("model turn: Claude reviewed 3 new"));
   });
 

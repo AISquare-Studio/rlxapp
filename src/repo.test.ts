@@ -37,7 +37,9 @@ describe("source rules", () => {
 
   it("respects prefers-reduced-motion and shows a focus ring on every control", () => {
     expect(tokensCss).toMatch(/@media \(prefers-reduced-motion: reduce\)[\s\S]*animation-duration: 0ms !important/);
-    expect(appCss).toMatch(/:focus-visible\s*\{\s*outline: 2px solid var\(--rlx-primary\)/);
+    expect(appCss).toMatch(/:focus-visible\s*\{\s*outline: var\(--rlx-focus-width\) solid var\(--rlx-focus-color\)/);
+    expect(tokensCss).toMatch(/--rlx-focus-width: 2px;/);
+    expect(tokensCss).toMatch(/--rlx-focus-color: var\(--rlx-primary\);/);
   });
 });
 

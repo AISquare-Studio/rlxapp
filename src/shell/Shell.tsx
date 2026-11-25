@@ -201,7 +201,7 @@ function SpaceRail() {
 function SideLink({ active, onClick, children, label }: { active: boolean; onClick: () => void; children: ReactNode; label?: string }) {
   return (
     <li>
-      <button type="button" className={`side-link${active ? " is-active" : ""}`} aria-current={active ? "page" : undefined} aria-label={label} onClick={onClick}>
+      <button type="button" className={`side-link reveal-host${active ? " is-active" : ""}`} aria-current={active ? "page" : undefined} aria-label={label} onClick={onClick}>
         {children}
       </button>
     </li>
@@ -223,7 +223,7 @@ function HomeSidebar() {
   return (
     <>
       <div className="space-header">
-        <strong>{state.settings.ownerName.split(" ")[0] ?? ""}'s agents</strong>
+        <strong>{state.settings.ownerName.split(" ")[0] ?? ""}'s space</strong>
       </div>
       <ul className="side-list">
         <SideLink active={screen.name === "home"} onClick={() => navigate({ name: "home" })} label="Dashboard">
@@ -258,13 +258,12 @@ function HomeSidebar() {
           <Avatar letter="r" manager />
           <span className="side-link__stack">
             <span className="side-link__text">Manager</span>
-            <span className="muted side-link__sub">Setup assistant</span>
           </span>
           <Unread id={MANAGER_ID} />
         </SideLink>
       </ul>
       <div className="sidebar__heading-row">
-        <h2 className="sidebar__title">Agent channels</h2>
+        <h2 className="sidebar__title">Agents</h2>
         <button type="button" className="icon-button icon-button--sm" aria-label="Create an agent with the manager" onClick={() => navigate({ name: "channel", id: MANAGER_ID })}>
           <Icon name="plus" size={14} />
         </button>
@@ -275,9 +274,9 @@ function HomeSidebar() {
           return (
             <SideLink key={agent.id} active={here(agent.id)} onClick={() => navigate({ name: "channel", id: agent.id })} label={`${agent.name}, ${status.label}`}>
               <Avatar letter={agent.avatar} status={status.kind} />
-              <span className="side-link__stack">
-                <span className="side-link__text"># {agent.name.toLowerCase().replace(/\s+/g, "-")}</span>
-                <span className="muted side-link__sub" data-testid={`status-${agent.id}`}>
+              <span className="side-link__stack" title={statusLine(status, now)}>
+                <span className="side-link__text">{agent.name}</span>
+                <span className="muted side-link__sub reveal" data-testid={`status-${agent.id}`}>
                   {statusLine(status, now)}
                 </span>
               </span>
@@ -390,7 +389,7 @@ function Members() {
                   <Avatar letter={agent.avatar} status={status.kind} />
                   <span className="side-link__stack">
                     <span className="side-link__text">{agent.name}</span>
-                    <span className="muted side-link__sub">{status.next !== undefined ? `wakes ${wakeLabel(status.next, now)}` : status.label}</span>
+                    <span className="muted side-link__sub reveal">{status.next !== undefined ? `wakes ${wakeLabel(status.next, now)}` : status.label}</span>
                   </span>
                 </SideLink>
               ))}

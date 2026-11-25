@@ -1,0 +1,23 @@
+/* Fixture: calm CSS the lint must accept. Never imported by the app. */
+.card {
+  padding: var(--rlx-space-4);
+  border: var(--rlx-border-width) solid var(--rlx-border-color);
+  border-radius: var(--rlx-radius-md);
+  font-size: var(--rlx-text-sm);
+  margin: 0 calc(-1 * var(--rlx-space-2));
+}
+
+.card.is-selected {
+  border-color: var(--rlx-selection-border);
+  background: var(--rlx-selection-bg);
+}
+
+.divider {
+  border-top: var(--rlx-border-width) solid var(--rlx-border-color);
+  border-left: 0;
+}
+
+.round {
+  border-radius: 50%;
+  outline: var(--rlx-focus-width) solid var(--rlx-focus-color);
+}

@@ -24,11 +24,15 @@ const PATHS = {
   reset: "M4 12a8 8 0 1 0 3-6.2M4 4v4h4",
   stop: "M6 6h12v12H6z",
   send: "M4 12l16-8-6 16-2-6z",
+  more: "M5 12h.01M12 12h.01M19 12h.01",
   bell: "M6 16v-5a6 6 0 0 1 12 0v5l2 2H4zM10 21a2 2 0 0 0 4 0",
   moon: "M20 14.5A8 8 0 1 1 9.5 4a6.5 6.5 0 0 0 10.5 10.5z",
 } as const;
 
 export type IconName = keyof typeof PATHS;
+
+/** Icons drawn as dots need a heavier stroke to read at small sizes. */
+const STROKE: Partial<Record<IconName, string>> = { more: "3" };
 
 export function Icon({ name, size = 18, label }: { name: IconName; size?: number; label?: string }) {
   return (
@@ -39,7 +43,7 @@ export function Icon({ name, size = 18, label }: { name: IconName; size?: number
       viewBox="0 0 24 24"
       fill="none"
       stroke="currentColor"
-      strokeWidth="1.8"
+      strokeWidth={STROKE[name] ?? "1.8"}
       strokeLinecap="round"
       strokeLinejoin="round"
       aria-hidden={label ? undefined : true}

@@ -4,6 +4,7 @@ import { useEngineData, useNow } from "../engine/hooks.ts";
 import { useApp } from "../state/context.ts";
 import type { Draft } from "../state/model.ts";
 import { Icon } from "../ui/Icon.tsx";
+import { MoreMenu } from "../ui/MoreMenu.tsx";
 import type { GenericManifest } from "./manifest.ts";
 
 function ago(now: number, then: number | null): string {
@@ -49,7 +50,8 @@ export function SlackDigestWidget({ settingsOpen }: { settingsOpen: boolean }) {
   }, [fetchedAt, reviewed, dispatch]);
   return (
     <div className="feed">
-      <p className="widget__meta" data-testid="slack-meta">
+      <div className="widget__meta-row">
+      <p className="widget__meta reveal-host" data-testid="slack-meta" tabIndex={0}>
         {status === "refreshing" && !data ? "Checking…" : ago(now, fetchedAt)}
         {reviewed !== undefined ? " · " : null}
         {reviewed !== undefined ? (
@@ -63,25 +65,25 @@ export function SlackDigestWidget({ settingsOpen }: { settingsOpen: boolean }) {
             </span>
           )
         ) : null}
-        {` · every ${interval} min`}
+        <span className="reveal">{` · every ${interval} min`}</span>
       </p>
-      <div className="button-row">
-        <button type="button" className="button button--sm" onClick={refresh} disabled={status === "refreshing"}>
-          <Icon name="reset" size={14} /> Refresh now
-        </button>
-        {demo ? (
-          <button
-            type="button"
-            className="button button--sm"
-            title="Demo control: the next fetch finds 3 new messages"
-            onClick={() => {
-              demo.simulateNewSlack(3);
-              refresh();
-            }}
-          >
-            New messages arrive <span className="demo-tag">demo</span>
-          </button>
-        ) : null}
+      <MoreMenu
+        label="More actions for Slack digest"
+        items={[
+          { label: "Refresh now", disabled: status === "refreshing", onSelect: refresh },
+          ...(demo
+            ? [
+                {
+                  label: "New messages arrive (demo)",
+                  onSelect: () => {
+                    demo.simulateNewSlack(3);
+                    refresh();
+                  },
+                },
+              ]
+            : []),
+        ]}
+      />
       </div>
       {settingsOpen ? (
         <label className="field field--inline">

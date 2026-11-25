@@ -5,6 +5,7 @@ import { START_OF_DAY_ID, avatarFor, nextWake, scheduleLabel, wakeLabel } from "
 import { useApp } from "../state/context.ts";
 import type { Card, Message, PriorityItem, SourceLink } from "../state/model.ts";
 import { Icon } from "../ui/Icon.tsx";
+import { MoreMenu } from "../ui/MoreMenu.tsx";
 import { AgentEditor } from "./AgentEditor.tsx";
 
 /** Auto's 10-second holds, by draft id, so Undo can stop one. */
@@ -15,8 +16,8 @@ function Sources({ sources }: { sources: SourceLink[] }) {
   return (
     <span className="sources">
       {sources.map((s) => (
-        <a key={s.url} className="source" href={s.url} target="_blank" rel="noreferrer" title={`Open the source in ${s.connector}`}>
-          <span className="source__connector">{s.connector.replace(/ \(.*\)$/, "")}</span> {s.label}
+        <a key={s.url} className="source" href={s.url} target="_blank" rel="noreferrer" title={s.label} aria-label={`Source: ${s.label} (${s.connector})`}>
+          {s.connector.replace(/ \(.*\)$/, "")}
         </a>
       ))}
     </span>
@@ -26,15 +27,19 @@ function Sources({ sources }: { sources: SourceLink[] }) {
 function PriorityList({ title, items }: { title: string; items: PriorityItem[] }) {
   return (
     <section className="priority__section" aria-label={title}>
-      <h4>
-        {title} <span className="muted">{items.length}</span>
-      </h4>
+      <h4>{title}</h4>
       <ol className="priority__list">
         {items.map((item) => (
-          <li key={item.id}>
+          <li key={item.id} className="reveal-host" tabIndex={0}>
             <div className="priority__text">{item.text}</div>
-            {item.why ? <div className="muted priority__why">{item.why}</div> : null}
-            <Sources sources={item.sources} />
+            <div className="priority__meta">
+              <Sources sources={item.sources} />
+              {item.why ? (
+                <span className="priority__why tip" role="tooltip">
+                  {item.why}
+                </span>
+              ) : null}
+            </div>
           </li>
         ))}
       </ol>
@@ -108,11 +113,10 @@ function EmailDraftCard({ draftId }: { draftId: string }) {
   };
 
   return (
-    <div className="card-msg email-draft" data-testid="email-draft-card">
+    <div className="card-msg email-draft reveal-host" data-testid="email-draft-card">
       <div className="card-msg__head">
-        <span className="badge">Email draft</span>
         <strong>To {draft.destination}</strong>
-        {draft.status === "approved" ? <span className="badge badge--sent">Approved</span> : null}
+        {draft.status === "approved" ? <span className="badge badge--sent">Approved</span> : <span className="badge">Draft</span>}
       </div>
       {draft.subject ? <div className="draft__subject">{draft.subject}</div> : null}
       {editing ? (
@@ -146,7 +150,7 @@ function EmailDraftCard({ draftId }: { draftId: string }) {
         ) : draft.status === "held" ? (
           <button
             type="button"
-            className="button button--warning"
+            className="button"
             onClick={() => {
               const timer = holds.get(draft.id);
               if (timer) clearTimeout(timer);
@@ -156,33 +160,36 @@ function EmailDraftCard({ draftId }: { draftId: string }) {
           >
             Undo
           </button>
-        ) : (
+        ) : null}
+        {draft.status === "held" ? <span className="muted">{hint}</span> : null}
+        {editing || draft.status === "held" ? null : (
           <>
-            <button
-              type="button"
-              className="button"
-              disabled={draft.status === "approved"}
-              onClick={() => dispatch({ type: "draft-status", id: draft.id, status: "approved" })}
-            >
-              Approve
-            </button>
-            <button
-              type="button"
-              className="button"
-              onClick={() => {
-                setText(draft.body);
-                setEditing(true);
-              }}
-            >
-              Edit
-            </button>
-            <button type="button" className="button button--primary" disabled={!canSend} onClick={send}>
-              <Icon name="send" size={16} /> Send
-            </button>
+            {canSend ? (
+              <button type="button" className="button button--primary" onClick={send}>
+                <Icon name="send" size={16} /> Send
+              </button>
+            ) : (
+              <button type="button" className="button button--primary" onClick={() => dispatch({ type: "draft-status", id: draft.id, status: "approved" })}>
+                Approve
+              </button>
+            )}
+            <MoreMenu
+              label={`More actions for the draft to ${draft.destination}`}
+              items={[
+                {
+                  label: "Edit",
+                  onSelect: () => {
+                    setText(draft.body);
+                    setEditing(true);
+                  },
+                },
+                { label: "Discard", onSelect: () => dispatch({ type: "draft-discard", id: draft.id }) },
+              ]}
+            />
+            <span className="muted card-msg__hint reveal">{hint}</span>
           </>
         )}
       </div>
-      <p className="muted card-msg__hint">{hint}</p>
     </div>
   );
 }
@@ -215,11 +222,9 @@ function NeedsContextCard({ message, card }: { message: Message; card: Extract<C
   return (
     <div className="card-msg needs-context" data-testid="needs-context-card">
       <div className="card-msg__head">
-        <span className="badge badge--warning">Needs context</span>
-        <strong>Before I reply to {card.to}</strong>
+        <span className="badge badge--warning">Needs your answer</span>
       </div>
       <p>{card.question}</p>
-      <Sources sources={card.sources} />
       {card.answered ? (
         <p className="muted">You answered “{card.answered}”. The draft is below.</p>
       ) : (
@@ -254,7 +259,6 @@ function ChecklistCard({ card }: { card: Extract<Card, { type: "checklist" }> })
   return (
     <div className="card-msg checklist" data-testid="checklist-card">
       <div className="card-msg__head">
-        <span className="badge">Checklist</span>
         <strong>{card.title}</strong>
       </div>
       <ul>
@@ -275,12 +279,13 @@ function PromiseCard({ card }: { card: Extract<Card, { type: "promise" }> }) {
   return (
     <div className="card-msg promise" data-testid="promise-card">
       <div className="card-msg__head">
-        <span className="badge">Meeting promise</span>
-        <strong>Due {card.due}</strong>
+        <strong>{card.text}</strong>
+        <span className="badge">Due {card.due}</span>
       </div>
-      <p>{card.text}.</p>
-      <p className="muted">From {card.meeting}</p>
-      <Sources sources={card.sources} />
+      <div className="priority__meta reveal-host" tabIndex={0}>
+        <Sources sources={card.sources} />
+        <span className="muted reveal">From {card.meeting}</span>
+      </div>
     </div>
   );
 }
@@ -339,7 +344,7 @@ function ProposalCard({ message, card }: { message: Message; card: Extract<Card,
         <span className="badge">New agent</span>
         <strong>Proposal</strong>
       </div>
-      <AgentEditor value={value} onChange={setValue} idPrefix={message.id} />
+      <AgentEditor value={value} onChange={setValue} idPrefix={message.id} fold />
       <div className="button-row">
         <button type="button" className="button button--primary" disabled={!value.name.trim() || value.connectors.length === 0} onClick={confirm}>
           Confirm

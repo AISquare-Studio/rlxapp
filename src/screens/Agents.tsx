@@ -17,7 +17,7 @@ export function Agents() {
       <div className="screen-header">
         <div>
           <h1>Agents</h1>
-          <p className="muted">They sleep until their schedule wakes them, run once, and sleep again. Silent runs only update widgets; loud runs notify you.</p>
+          <p className="muted">Asleep until their schedule wakes them.</p>
         </div>
         <div className="button-row">
           {demo && hasBriefing ? (
@@ -34,35 +34,45 @@ export function Agents() {
         {agents.map((agent) => {
           const status = agentStatus(agent, running.has(agent.id), now);
           return (
-            <li key={agent.id} className="agent-row" data-testid={`agent-row-${agent.id}`} aria-label={agent.name}>
+            <li key={agent.id} className="agent-row reveal-host" data-testid={`agent-row-${agent.id}`} aria-label={agent.name}>
               <button type="button" className="agent-row__who" onClick={() => navigate({ name: "channel", id: agent.id })} aria-label={`Open ${agent.name}'s channel`}>
                 <Avatar letter={agent.avatar} status={status.kind} size="lg" />
                 <span>
                   <strong>{agent.name}</strong>
-                  <span className="muted agent-row__purpose">{agent.purpose}</span>
+                  <span className="muted agent-row__next">
+                    {status.next !== undefined ? `Next wake ${wakeLabel(status.next, now)}` : status.kind === "running" ? "Running now" : "Won't wake until resumed"}
+                  </span>
                 </span>
               </button>
-              <div className="agent-row__facts">
-                <div>
-                  <StatusChip status={status} /> <ModeChip agent={agent} />
-                </div>
-                <div className="muted">
-                  {scheduleLabel(agent.schedule)}
-                  {status.next !== undefined ? ` · next wake ${wakeLabel(status.next, now)}` : ""}
-                </div>
-                <div>
-                  <span className="muted">Last run </span>
-                  <LastRun agent={agent} now={now} />
-                </div>
-                <ul className="connector-chips connector-chips--static" aria-label={`${agent.name}'s connectors`}>
-                  {agent.connectors.map((c) => (
-                    <li key={c} className="connector-chip">
-                      {c}
-                    </li>
-                  ))}
-                </ul>
+              <div className="agent-row__state">
+                <StatusChip status={status} />
               </div>
-              <AgentActions agent={agent} />
+              <AgentActions agent={agent} extra={[{ label: "Open channel", onSelect: () => navigate({ name: "channel", id: agent.id }) }]} />
+              <details className="fold agent-row__details">
+                <summary>Details</summary>
+                <dl className="facts">
+                  <dt>Does</dt>
+                  <dd>{agent.purpose}</dd>
+                  <dt>Schedule</dt>
+                  <dd>
+                    {scheduleLabel(agent.schedule)} · <ModeChip agent={agent} />
+                  </dd>
+                  <dt>Last run</dt>
+                  <dd>
+                    <LastRun agent={agent} now={now} />
+                  </dd>
+                  <dt>Connectors</dt>
+                  <dd>
+                    <ul className="connector-chips connector-chips--static" aria-label={`${agent.name}'s connectors`}>
+                      {agent.connectors.map((c) => (
+                        <li key={c} className="connector-chip">
+                          {c}
+                        </li>
+                      ))}
+                    </ul>
+                  </dd>
+                </dl>
+              </details>
             </li>
           );
         })}

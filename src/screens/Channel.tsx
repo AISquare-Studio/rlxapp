@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { ModeChip, StatusChip } from "../agents/AgentDetails.tsx";
+import { AgentActions, StatusChip } from "../agents/AgentDetails.tsx";
 import { nextId, useAgents } from "../agents/useAgents.ts";
 import { CardView } from "../chat/Cards.tsx";
 import { newRunId, useNow } from "../engine/hooks.ts";
@@ -35,7 +35,7 @@ export function Channel({ id }: { id: string }) {
 
 function Conversation({ id, agent }: { id: string; agent?: Agent }) {
   const { state, engine, dispatch, now, demo } = useApp();
-  const { running, wake, simulateNine } = useAgents();
+  const { running, simulateNine } = useAgents();
   const nowTick = useNow(30_000);
   const [text, setText] = useState("");
   const [busy, setBusy] = useState(false);
@@ -93,26 +93,12 @@ function Conversation({ id, agent }: { id: string; agent?: Agent }) {
         <Avatar letter={isManager ? "r" : (agent?.avatar ?? "?")} status={status?.kind} manager={isManager} />
         <div className="channel__title">
           <h1>{isManager ? "Manager" : `# ${name.toLowerCase().replace(/\s+/g, "-")}`}</h1>
-          {agent && status ? (
-            <span className="channel__chips">
-              <StatusChip status={status} />
-              <ModeChip agent={agent} />
-              <span className="muted">{agent.purpose}</span>
-            </span>
-          ) : (
-            <span className="muted">Your setup assistant. Tell it what you want done, and when.</span>
-          )}
+          {agent && status ? null : <span className="muted">Your setup assistant</span>}
         </div>
         {agent && status ? (
           <div className="button-row">
-            {demo && agent.role === "briefing" ? (
-              <button type="button" className="button button--sm" onClick={simulateNine} title="Demo control: fire the weekday 09:00 schedule now">
-                <Icon name="play" size={14} /> Simulate 9:00 <span className="demo-tag">demo</span>
-              </button>
-            ) : null}
-            <button type="button" className="button button--sm" disabled={status.kind === "running" || status.kind === "paused"} onClick={() => void wake(agent)}>
-              <Icon name="play" size={14} /> Wake now
-            </button>
+            <StatusChip status={status} />
+            <AgentActions agent={agent} compact extra={demo && agent.role === "briefing" ? [{ label: "Simulate 9:00 (demo)", onSelect: simulateNine }] : []} />
           </div>
         ) : null}
       </header>
@@ -127,8 +113,8 @@ function Conversation({ id, agent }: { id: string; agent?: Agent }) {
         {messages.map((m, i) => {
           if (m.from === "system") {
             return (
-              <li key={m.id} className="message message--system">
-                <Icon name="reset" size={14} /> <span>{m.text}</span> <time className="muted">{time(m.at)}</time>
+              <li key={m.id} className="message message--system reveal-host" tabIndex={0}>
+                <span>{m.text}</span> <time className="muted reveal">{time(m.at)}</time>
               </li>
             );
           }
@@ -136,7 +122,7 @@ function Conversation({ id, agent }: { id: string; agent?: Agent }) {
           const grouped = prev !== undefined && prev.from === m.from && m.at - prev.at < 5 * 60_000;
           const who = m.from === "owner" ? ownerName : name;
           return (
-            <li key={m.id} className={`message${grouped ? " message--grouped" : ""}${m.from === "owner" ? " message--owner" : ""}`}>
+            <li key={m.id} className={`message reveal-host${grouped ? " message--grouped" : ""}${m.from === "owner" ? " message--owner" : ""}`}>
               {grouped ? (
                 <span className="message__gutter" aria-hidden="true" />
               ) : m.from === "owner" ? (
@@ -149,7 +135,7 @@ function Conversation({ id, agent }: { id: string; agent?: Agent }) {
                   <div className="message__meta">
                     <strong>{who}</strong>
                     {m.from === "agent" ? <span className="bot-tag">AI agent</span> : null}
-                    <time className="muted">{time(m.at)}</time>
+                    <time className="muted reveal">{time(m.at)}</time>
                   </div>
                 )}
                 {m.text !== undefined ? <p className="message__text">{m.text || "…"}</p> : null}
@@ -160,7 +146,7 @@ function Conversation({ id, agent }: { id: string; agent?: Agent }) {
         })}
         <li key={`end-${messages.length}`} className="messages__end" ref={(el) => el?.scrollIntoView?.({ block: "nearest" })} />
       </ol>
-      {isManager && !busy ? (
+      {isManager && !busy && !messages.some((m) => m.from === "owner") ? (
         <div className="quick-replies" aria-label="Suggestions">
           {MANAGER_SUGGESTIONS.map((s) => (
             <button key={s} type="button" className="button button--sm" onClick={() => void send(s)}>

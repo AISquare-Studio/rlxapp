@@ -28,6 +28,18 @@ async function createStartOfDay() {
   return card;
 }
 
+/** Opens a ⋯ menu and picks an item. */
+function pick(menu: string, item: string, scope: HTMLElement = document.body) {
+  fireEvent.click(within(scope).getByRole("button", { name: menu }));
+  fireEvent.click(within(scope).getByRole("menuitem", { name: item }));
+}
+
+/** Simulate 9:00, from the Start of day channel's ⋯ menu. */
+async function simulateNineInChannel() {
+  fireEvent.click(await screen.findByRole("button", { name: "Start of day, Scheduled 09:00" }));
+  pick("More actions for Start of day", "Simulate 9:00 (demo)");
+}
+
 async function confirmStartOfDay() {
   const card = await createStartOfDay();
   fireEvent.click(within(card).getByRole("button", { name: "Confirm" }));
@@ -69,7 +81,8 @@ describe("Agents section", () => {
     expect(within(gtm).getByText("Running")).toBeTruthy();
     const meetings = screen.getByTestId("agent-row-meetings-agent");
     expect(within(meetings).getByText("Scheduled 08:45")).toBeTruthy();
-    expect(within(meetings).getByText(/Daily at 08:45 · next wake/)).toBeTruthy();
+    expect(within(meetings).getByText(/^Next wake tomorrow|^Next wake today|^Next wake/)).toBeTruthy();
+    expect(within(meetings).getByText(/Daily at 08:45/)).toBeTruthy();
     expect(within(meetings).getByText("Meet transcripts (Google Drive)")).toBeTruthy();
     const slack = screen.getByTestId("agent-row-slack-agent");
     expect(within(slack).getByText("Asleep")).toBeTruthy();
@@ -77,17 +90,17 @@ describe("Agents section", () => {
     expect(within(slack).getByText(/Fetched, nothing new, no Claude usage/)).toBeTruthy();
     expect(within(slack).getByText("no Claude usage")).toBeTruthy();
 
-    fireEvent.click(within(meetings).getByRole("button", { name: "Pause Meetings agent" }));
+    pick("More actions for Meetings agent", "Pause", meetings);
     expect(within(meetings).getByText("Paused")).toBeTruthy();
     expect((within(meetings).getByRole("button", { name: "Wake Meetings agent now" }) as HTMLButtonElement).disabled).toBe(true);
-    fireEvent.click(within(meetings).getByRole("button", { name: "Resume Meetings agent" }));
+    pick("More actions for Meetings agent", "Resume", meetings);
     expect(within(meetings).getByText("Scheduled 08:45")).toBeTruthy();
 
     fireEvent.click(within(slack).getByRole("button", { name: "Wake Slack agent now" }));
     expect(await within(slack).findByText("Running")).toBeTruthy();
     expect(await within(slack).findByText("Asleep")).toBeTruthy();
 
-    fireEvent.click(within(slack).getByRole("button", { name: "Edit Slack agent" }));
+    pick("More actions for Slack agent", "Edit", slack);
     const dialog = screen.getByRole("dialog", { name: "Edit Slack agent" });
     fireEvent.change(within(dialog).getByLabelText("Agent name"), { target: { value: "Slack watcher" } });
     fireEvent.click(within(dialog).getByRole("button", { name: "Save" }));
@@ -118,7 +131,8 @@ describe("Start of day", () => {
     fireEvent.click(screen.getByRole("button", { name: "Agents" }));
     const row = await screen.findByTestId("agent-row-start-of-day");
     expect(within(row).getByText("Scheduled 09:00")).toBeTruthy();
-    expect(within(row).getByText(/Weekdays at 09:00 · next wake/)).toBeTruthy();
+    expect(within(row).getByText(/^Next wake/)).toBeTruthy();
+    expect(within(row).getByText(/Weekdays at 09:00/)).toBeTruthy();
     expect(within(row).getByText("Loud")).toBeTruthy();
     expect(within(row).getByText("Hasn't run yet")).toBeTruthy();
   });
@@ -150,7 +164,7 @@ describe("Start of day", () => {
     expect(within(messages).getByText(/Good morning Sam/)).toBeTruthy();
     expect(within(messages).getByTestId("priority-card")).toBeTruthy();
     const promise = within(messages).getByTestId("promise-card");
-    expect(promise.textContent).toMatch(/Due Friday.*You said you'd send Lena the Q4 deck outline/s);
+    expect(promise.textContent).toMatch(/You said you'd send Lena the Q4 deck outline.*Due Friday/s);
     expect(within(promise).getByRole("link").getAttribute("href")).toBe("https://example.com/drive/sync-notes");
     expect(within(messages).getByTestId("checklist-card")).toBeTruthy();
     // No raw run log outside Developer mode.
@@ -160,16 +174,15 @@ describe("Start of day", () => {
   it("posts an email draft (sign-off, Approve / Edit / Send) and a needs-context card whose answer becomes a draft", async () => {
     renderApp();
     await confirmStartOfDay();
-    fireEvent.click(await screen.findByRole("button", { name: "Start of day, Scheduled 09:00" }));
-    fireEvent.click(await screen.findByRole("button", { name: /Simulate 9:00/ }));
+    await simulateNineInChannel();
     const messages = screen.getByTestId("messages");
     const draft = await within(messages).findByTestId("email-draft-card");
     expect(within(draft).getByText("To Finance Team")).toBeTruthy();
     expect(within(draft).getByTestId("sign-off").textContent).toBe("— Nova, Sam Rivera's AI Agent");
     expect(within(draft).getByRole("link", { name: "AI Agent" }).getAttribute("href")).toBe("https://github.com/AISquare-Studio/rlxapp");
-    const send = within(draft).getByRole("button", { name: /Send/ }) as HTMLButtonElement;
-    expect(send.disabled).toBe(true);
-    fireEvent.click(within(draft).getByRole("button", { name: "Edit" }));
+    // Draft mode: Approve is the one primary action; Send appears only once approved.
+    expect(within(draft).queryByRole("button", { name: /Send/ })).toBeNull();
+    pick("More actions for the draft to Finance Team", "Edit", draft);
     fireEvent.change(within(draft).getByLabelText("Message"), { target: { value: "Thanks. I'll bring the forecast Thursday." } });
     fireEvent.click(within(draft).getByRole("button", { name: "Save" }));
     expect(within(draft).getByText("Thanks. I'll bring the forecast Thursday.")).toBeTruthy();
@@ -193,8 +206,7 @@ describe("Start of day", () => {
     const expected = "— Atlas, Sam Rivera's AI Agent";
     renderApp({ ...onboarded, agentName: "Atlas" });
     await confirmStartOfDay();
-    fireEvent.click(await screen.findByRole("button", { name: "Start of day, Scheduled 09:00" }));
-    fireEvent.click(await screen.findByRole("button", { name: /Simulate 9:00/ }));
+    await simulateNineInChannel();
     const messages = screen.getByTestId("messages");
     const draft = await within(messages).findByTestId("email-draft-card");
     // The helper posts as itself in its channel…
@@ -228,14 +240,13 @@ describe("Start of day", () => {
   it("holds a send for 10 seconds with Undo when the connector is on Auto", async () => {
     renderApp({ ...onboarded, sendModes: { ...onboarded.sendModes, "claude.ai Gmail": "auto" } });
     await confirmStartOfDay();
-    fireEvent.click(await screen.findByRole("button", { name: "Start of day, Scheduled 09:00" }));
-    fireEvent.click(await screen.findByRole("button", { name: /Simulate 9:00/ }));
+    await simulateNineInChannel();
     const draft = await screen.findByTestId("email-draft-card");
     vi.useFakeTimers();
     fireEvent.click(within(draft).getByRole("button", { name: /Send/ }));
     expect(within(draft).getByText(/Sending in 10 seconds/)).toBeTruthy();
     fireEvent.click(within(draft).getByRole("button", { name: "Undo" }));
-    expect(within(draft).getByRole("button", { name: "Approve" })).toBeTruthy();
+    expect(within(draft).queryByText(/Sending in 10 seconds/)).toBeNull();
     fireEvent.click(within(draft).getByRole("button", { name: /Send/ }));
     act(() => vi.advanceTimersByTime(10_000));
     expect(within(draft).getByText("Sent")).toBeTruthy();
