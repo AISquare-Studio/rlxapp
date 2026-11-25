@@ -2,6 +2,11 @@
 
 #[cfg(feature = "e2e")]
 mod e2e;
+
+// The e2e feature carries the canary command and a registry bypass for the probe's fixtures.
+// Test builds are debug builds (`npm run e2e:build`); a release never carries it.
+#[cfg(all(feature = "e2e", not(debug_assertions)))]
+compile_error!("the e2e feature is for debug test builds only (npm run e2e:build)");
 mod probe;
 pub mod widget_host;
 

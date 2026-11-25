@@ -19,19 +19,10 @@ fn main() {
         "widgets_push",
         "widgets_register",
     ];
-    const E2E_COMMANDS: &[&str] = &[
-        "app_info",
-        "report_first_paint",
-        "widgets_policy",
-        "widgets_show",
-        "widgets_hide",
-        "widgets_mount",
-        "widgets_push",
-        "widgets_register",
-        "e2e_canary",
-    ];
-    let commands = if std::env::var_os("CARGO_FEATURE_E2E").is_some() {
-        E2E_COMMANDS
+    let commands: &'static [&'static str] = if std::env::var_os("CARGO_FEATURE_E2E").is_some() {
+        let mut list = COMMANDS.to_vec();
+        list.push("e2e_canary");
+        Box::leak(list.into_boxed_slice())
     } else {
         COMMANDS
     };
