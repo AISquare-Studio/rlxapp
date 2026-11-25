@@ -10,7 +10,8 @@
 //!   a same-origin POST to a custom scheme, so the token is what proves the host origin;
 //! - with no `Origin`, or with `Origin` equal to the host origin. A sandboxed frame's
 //!   `null`, or any other page's origin, is refused;
-//! - when it parses as one of the `FromWidget` shapes, within the size limits.
+//! - when it parses as one of the `FromWidget` shapes, within the size limits;
+//! - for a `widgetId` that is registered.
 //!
 //! What an accepted action then does (open a URL, notify, draft a send, refresh) is the
 //! core's and the UI's job, through the `widget-action` event to main. The core re-validates
@@ -106,6 +107,8 @@ pub enum ActionError {
     WrongWebview,
     /// The host token is missing or wrong: not the host page's top frame.
     NotTheHost,
+    /// No widget with this ID is registered.
+    UnknownWidget,
     /// With the `Origin` the request carried, if any.
     WrongOrigin(Option<String>),
     NotPost,
@@ -116,7 +119,9 @@ pub enum ActionError {
 impl ActionError {
     pub fn status(&self) -> StatusCode {
         match self {
-            Self::WrongWebview | Self::NotTheHost | Self::WrongOrigin(_) => StatusCode::FORBIDDEN,
+            Self::WrongWebview | Self::NotTheHost | Self::WrongOrigin(_) | Self::UnknownWidget => {
+                StatusCode::FORBIDDEN
+            }
             Self::NotPost => StatusCode::METHOD_NOT_ALLOWED,
             Self::TooLarge => StatusCode::PAYLOAD_TOO_LARGE,
             Self::Invalid(_) => StatusCode::BAD_REQUEST,
@@ -129,6 +134,7 @@ impl fmt::Display for ActionError {
         match self {
             Self::WrongWebview => write!(f, "actions are accepted only from the widgets webview"),
             Self::NotTheHost => write!(f, "actions are accepted only from the host page"),
+            Self::UnknownWidget => write!(f, "no widget with that id is registered"),
             Self::WrongOrigin(got) => write!(
                 f,
                 "actions are accepted only from the host origin (got {})",
@@ -141,8 +147,12 @@ impl fmt::Display for ActionError {
     }
 }
 
-/// Checks one action request against the launch's host token.
-pub fn accept(request: &RouteRequest<'_>, host_token: &str) -> Result<WidgetAction, ActionError> {
+/// Checks one action request against the launch's host token and the registered widgets.
+pub fn accept(
+    request: &RouteRequest<'_>,
+    host_token: &str,
+    is_registered: &dyn Fn(&str) -> bool,
+) -> Result<WidgetAction, ActionError> {
     if request.webview_label != LABEL {
         return Err(ActionError::WrongWebview);
     }
@@ -166,6 +176,9 @@ pub fn accept(request: &RouteRequest<'_>, host_token: &str) -> Result<WidgetActi
     let invalid = |why: &str| Err(ActionError::Invalid(why.to_owned()));
     if !valid_id(&action.widget_id) {
         return invalid("bad widget id");
+    }
+    if !is_registered(&action.widget_id) {
+        return Err(ActionError::UnknownWidget);
     }
     if action.message.version() != 1 {
         return invalid("unknown message version");
@@ -217,6 +230,11 @@ mod tests {
 
     const TOKEN: &str = "launch-token";
 
+    /// The registered widgets in these tests.
+    fn known(id: &str) -> bool {
+        matches!(id, "clock" | "prs" | "x")
+    }
+
     fn body(value: Value) -> Vec<u8> {
         serde_json::to_vec(&value).unwrap()
     }
@@ -232,7 +250,7 @@ mod tests {
     }
 
     fn post(value: Value) -> Result<WidgetAction, ActionError> {
-        accept(&request(&body(value)), TOKEN)
+        accept(&request(&body(value)), TOKEN, &known)
     }
 
     fn refresh() -> Vec<u8> {
@@ -257,7 +275,7 @@ mod tests {
             origin: Some(origin()),
             ..request(&body)
         };
-        assert!(accept(&with_origin, TOKEN).is_ok());
+        assert!(accept(&with_origin, TOKEN, &known).is_ok());
     }
 
     #[test]
@@ -269,7 +287,7 @@ mod tests {
                 ..request(&body)
             };
             assert_eq!(
-                accept(&other, TOKEN),
+                accept(&other, TOKEN, &known),
                 Err(ActionError::WrongWebview),
                 "{label}"
             );
@@ -285,7 +303,7 @@ mod tests {
                 ..request(&body)
             };
             assert_eq!(
-                accept(&framed, TOKEN),
+                accept(&framed, TOKEN, &known),
                 Err(ActionError::NotTheHost),
                 "{token:?}"
             );
@@ -295,7 +313,7 @@ mod tests {
             token: Some(""),
             ..request(&body)
         };
-        assert_eq!(accept(&empty, ""), Err(ActionError::NotTheHost));
+        assert_eq!(accept(&empty, "", &known), Err(ActionError::NotTheHost));
     }
 
     #[test]
@@ -321,7 +339,7 @@ mod tests {
                 ..request(&body)
             };
             assert_eq!(
-                accept(&request, TOKEN),
+                accept(&request, TOKEN, &known),
                 Err(ActionError::WrongOrigin(Some(bad.to_owned()))),
                 "{bad}"
             );
@@ -330,7 +348,13 @@ mod tests {
             is_post: false,
             ..request(&body)
         };
-        assert_eq!(accept(&get, TOKEN), Err(ActionError::NotPost));
+        assert_eq!(accept(&get, TOKEN, &known), Err(ActionError::NotPost));
+    }
+
+    #[test]
+    fn rejects_an_unregistered_widget_id() {
+        let unknown = json!({ "widgetId": "spoofed", "message": { "type": "refresh", "v": 1 } });
+        assert_eq!(post(unknown), Err(ActionError::UnknownWidget));
     }
 
     #[test]
@@ -356,6 +380,9 @@ mod tests {
             );
         }
         let huge = vec![b' '; MAX_BODY_BYTES + 1];
-        assert_eq!(accept(&request(&huge), TOKEN), Err(ActionError::TooLarge));
+        assert_eq!(
+            accept(&request(&huge), TOKEN, &known),
+            Err(ActionError::TooLarge)
+        );
     }
 }

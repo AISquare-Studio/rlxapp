@@ -11,14 +11,17 @@
 //!    iframe; `control` is for the main webview's control run. Each passes a self-test first.
 //! 2. The per-OS switch, through the product API: an agent-made widget must be refused while
 //!    the switch is off, and on Linux nothing registers and no widget webview attaches.
-//! 3. Where the OS has a widget webview (macOS, Windows), the `widgets` child webview is
-//!    attached exactly as the product does it (`widget_host::attach`). The core mounts:
+//! 3. On macOS the `widgets` child webview is attached exactly as the product does it
+//!    (`widget_host::attach`). On Windows the product attaches none in v0, so the probe
+//!    attaches one anyway (`attach_for_probe`) to measure WebView2. The core mounts, through
+//!    the product's `mount_now`:
 //!    - the probe fixture, standing in for an agent-made widget;
 //!    - a built-in control widget;
 //!    - the refused agent-made widget's URL.
 //!
 //!    `probe-host.js` probes from the host page, and `probe-widget.html` from inside the
-//!    widget iframe.
+//!    widget iframe. Then the core reloads the webview and checks that its replay restores
+//!    the grid.
 //! 4. In main: a control call of the canary, which must be recorded, and an iframe that
 //!    main's CSP must block.
 //!
@@ -38,7 +41,8 @@ use tauri::ipc::CapabilityBuilder;
 use tauri::webview::{PageLoadEvent, PageLoadPayload};
 use tauri::{AppHandle, Manager, Runtime, Webview};
 
-use crate::widget_host::{self, Bounds, HostExtras, PolicyInfo, Registry, Source};
+use crate::widget_host::state::{HostState, MountEntry, mount_now};
+use crate::widget_host::{self, Bounds, HostExtras, HostFn, PolicyInfo, Registry, Source};
 use listener::Listener;
 
 /// Names the file the report is written to. Unset, the probe doesn't run.
@@ -262,6 +266,7 @@ impl Run {
 
         // The switch, through the product API.
         let registry = app.state::<Registry>();
+        let host_state = app.state::<HostState>();
         let policy = registry.policy();
         let agent_register =
             describe(registry.register(Source::Agent, AGENT_ID, 1, &announcing_widget(AGENT_ID)));
@@ -272,8 +277,48 @@ impl Run {
             &announcing_widget(BUILTIN_ID),
         ));
 
-        // Where the OS has a widget webview, probe it: the fixture and the built-in control
-        // go in as fixtures, whatever the policy says about built-ins.
+        let window = app.get_window("main");
+        let bounds = Bounds {
+            x: 540.0,
+            y: 300.0,
+            width: 400.0,
+            height: 320.0,
+        };
+        // The product's own attach: refused where the policy has no widget webview.
+        let attach = match &window {
+            Some(window) => widget_host::attach(window, policy, bounds),
+            None => {
+                errors.push("no main window".into());
+                Err(widget_host::AttachError::NotOnThisOs)
+            }
+        };
+        let attach_outcome = match &attach {
+            Ok(_) => "attached".to_owned(),
+            Err(error) => format!("refused: {error}"),
+        };
+        // On Windows the product attaches none in v0; the probe attaches one anyway, to
+        // measure WebView2. Linux can't place one, so it gets none.
+        let mut probe_attach = "not needed".to_owned();
+        let widgets = match (attach, &window) {
+            (Ok(widgets), _) => Some(widgets),
+            (Err(_), Some(window)) if cfg!(windows) => {
+                match widget_host::attach_for_probe(window, bounds) {
+                    Ok(widgets) => {
+                        probe_attach = "attached for the probe only".to_owned();
+                        Some(widgets)
+                    }
+                    Err(error) => {
+                        probe_attach = format!("failed: {error}");
+                        errors.push(format!("probe attach: {error}"));
+                        None
+                    }
+                }
+            }
+            _ => None,
+        };
+
+        // Where a widget webview exists, probe it: the fixture (as agent-made) and the
+        // built-in control go in as fixtures, whatever the policy says.
         let fixture_html = PROBE_WIDGET_HTML
             .replace(
                 "__RLX_PROBE_PORT__",
@@ -285,37 +330,25 @@ impl Run {
             )
             .replace("__RLX_PROBE_CHANNEL_FETCH__", CHANNEL_FETCH);
         let mut fixtures = "not registered: no widget webview on this OS".to_owned();
-        if policy.widget_webview {
-            fixtures = describe(registry.register_probe_fixture(FIXTURE_ID, 1, &fixture_html));
+        if widgets.is_some() {
+            fixtures = describe(registry.register_probe_fixture(
+                Source::Agent,
+                FIXTURE_ID,
+                1,
+                &fixture_html,
+            ));
             if !registry.contains(BUILTIN_ID, 1) {
-                let control =
-                    registry.register_probe_fixture(BUILTIN_ID, 1, &announcing_widget(BUILTIN_ID));
+                let control = registry.register_probe_fixture(
+                    Source::Builtin,
+                    BUILTIN_ID,
+                    1,
+                    &announcing_widget(BUILTIN_ID),
+                );
                 if let Err(error) = control {
                     errors.push(format!("built-in control: {error}"));
                 }
             }
         }
-
-        let attach = match app.get_window("main") {
-            Some(window) => widget_host::attach(
-                &window,
-                policy,
-                Bounds {
-                    x: 540.0,
-                    y: 300.0,
-                    width: 400.0,
-                    height: 320.0,
-                },
-            ),
-            None => {
-                errors.push("no main window".into());
-                Err(widget_host::AttachError::NotOnThisOs)
-            }
-        };
-        let attach_outcome = match &attach {
-            Ok(_) => "attached".to_owned(),
-            Err(error) => format!("refused: {error}"),
-        };
 
         let main = app.get_webview("main");
         let main_script = MAIN_CONTROL_JS
@@ -339,22 +372,39 @@ impl Run {
 
         let mut host_report = Value::Null;
         let mut host_after_nav = Value::Null;
-        if let Ok(widgets) = &attach {
-            let ready =
-                "typeof window.__rlxHost === 'object' && typeof window.__rlxProbe === 'object'";
-            match wait_for(widgets, ready, Duration::from_secs(60)) {
-                Some(Value::Bool(true)) => {}
-                other => errors.push(format!("the host page never loaded: {other:?}")),
+        let mut mount_result = Value::Null;
+        let mut reload = Value::Null;
+        let mut frames_before_nav = Value::Null;
+        if let Some(widgets) = &widgets {
+            // The product path: mount_now resolves only once the host page has mounted.
+            let entry = |id: &str, title: &str| MountEntry {
+                id: id.to_owned(),
+                version: 1,
+                title: title.to_owned(),
+            };
+            let mounted = mount_now(
+                widgets,
+                &host_state,
+                &registry,
+                vec![
+                    entry(FIXTURE_ID, "isolation probe"),
+                    entry(BUILTIN_ID, "built-in control"),
+                    entry(AGENT_ID, "agent-made (refused)"),
+                ],
+                Duration::from_secs(60),
+            );
+            mount_result = match &mounted {
+                Ok(ids) => json!({ "ok": true, "ids": ids }),
+                Err(error) => json!({ "ok": false, "error": error }),
+            };
+            // The refused agent widget isn't registered, so the product mounts nothing for
+            // it. Mount its URL straight into the page as well, to show the scheme serves
+            // nothing there either.
+            let raw_agent = json!([{ "id": AGENT_ID, "version": 1, "url": widget_host::widget_url(AGENT_ID, 1), "title": "agent-made (refused)" }]);
+            if let Err(error) = widgets.eval(widget_host::host_call(HostFn::Mount, &[raw_agent])) {
+                errors.push(format!("raw agent mount: {error}"));
             }
-            let entry = |id: &str, title: &str| json!({ "id": id, "version": 1, "url": widget_host::widget_url(id, 1), "title": title });
-            let mount = json!([
-                entry(FIXTURE_ID, "isolation probe"),
-                entry(BUILTIN_ID, "built-in control"),
-                entry(AGENT_ID, "agent-made (switch off)"),
-            ]);
-            if let Err(error) = widgets.eval(widget_host::mount_call(&registry, mount)) {
-                errors.push(format!("mount: {error}"));
-            }
+
             let done = "window.__rlxProbe && window.__rlxProbe.report.done ? JSON.stringify(window.__rlxProbe.report) : false";
             match wait_for(widgets, done, Duration::from_secs(150)) {
                 Some(Value::String(text)) => {
@@ -362,6 +412,41 @@ impl Run {
                 }
                 other => errors.push(format!("the host probe never finished: {other:?}")),
             }
+
+            // A reload empties the page; the core's replay must bring back what it mounted.
+            let loads_before = host_state.loads();
+            let _ = widgets.eval("location.reload()");
+            let deadline = Instant::now() + Duration::from_secs(30);
+            while host_state.loads() == loads_before && Instant::now() < deadline {
+                thread::sleep(Duration::from_millis(100));
+            }
+            let frames_js = "JSON.stringify([...document.querySelectorAll('iframe')].map((f) => f.dataset.widgetId))";
+            let mut frames_after = Value::Null;
+            let deadline = Instant::now() + Duration::from_secs(15);
+            while Instant::now() < deadline {
+                frames_after = eval_value(widgets, frames_js, Duration::from_secs(5))
+                    .and_then(|v| v.as_str().and_then(|s| serde_json::from_str(s).ok()))
+                    .unwrap_or(Value::Null);
+                if frames_after.as_array().is_some_and(|ids| ids.len() >= 2) {
+                    break;
+                }
+                thread::sleep(Duration::from_millis(250));
+            }
+            reload = json!({
+                "loadsBefore": loads_before,
+                "loadsAfter": host_state.loads(),
+                "frames": frames_after,
+            });
+            // Let the reloaded probe page settle before the last step.
+            let ready = "typeof window.__rlxProbe === 'object'";
+            let _ = wait_for(widgets, ready, Duration::from_secs(30));
+            frames_before_nav = eval_value(
+                widgets,
+                "document.querySelectorAll('iframe').length",
+                Duration::from_secs(5),
+            )
+            .unwrap_or(Value::Null);
+
             // Navigation goes last: if it isn't blocked, the page is gone.
             let _ = widgets.eval("window.__rlxProbe.navigate()");
             thread::sleep(Duration::from_secs(5));
@@ -394,7 +479,7 @@ impl Run {
         let listener = |name: &str, l: &Listener, self_test: bool| json!({ "name": name, "port": l.port, "selfTest": self_test, "hits": l.hits() });
 
         let report = json!({
-            "schema": 2,
+            "schema": 3,
             "os": std::env::consts::OS,
             "arch": std::env::consts::ARCH,
             "elapsedMs": started.elapsed().as_millis() as u64,
@@ -404,10 +489,14 @@ impl Run {
                 "builtinRegister": builtin_register,
                 "fixtures": fixtures,
                 "attach": attach_outcome,
+                "probeAttach": probe_attach,
             },
             "webviews": webviews,
             "commandCount": self.commands.len(),
+            "mount": mount_result,
             "host": host_report,
+            "reload": reload,
+            "framesBeforeNavigation": frames_before_nav,
             "hostAfterNavigation": host_after_nav,
             "main": main_report,
             "canary": canary,

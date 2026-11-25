@@ -88,6 +88,7 @@ pub fn run() {
     let builder = tauri::Builder::default()
         .manage(Probe::from_env())
         .manage(widget_host::Registry::default())
+        .manage(widget_host::state::HostState::default())
         .register_uri_scheme_protocol(widget_host::SCHEME, widget_scheme);
 
     #[cfg(not(feature = "e2e"))]

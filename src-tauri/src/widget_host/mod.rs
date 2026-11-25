@@ -13,7 +13,8 @@
 //!   built app.
 //! - **No IPC needed.** The core drives the host page only by `Webview::eval` of the two
 //!   functions in host.js. Arguments go in as serde_json output ([`host_call`]), never as
-//!   interpolated strings.
+//!   interpolated strings. The core keeps what the page should show and replays it on every
+//!   page load ([`state`]), so nothing depends on timing and a reload restores the grid.
 //! - **Actions** come out as POSTs to `/host/action` ([`action`]). They are accepted only
 //!   from the `widgets` label and the host origin, then validated against §5.2.
 //! - **Navigation** in the widgets webview stays on the scheme ([`allow_navigation`]), and the
@@ -24,8 +25,10 @@
 //!
 //! # Per OS in v0 ([`policy`])
 //! - macOS: built-ins render in the widget webview. Agent-made widgets are off.
-//! - Windows: the widget webview exists, but built-ins render as escaped React in main, as on
-//!   Linux, until the probe passes on Windows. Agent-made widgets are off.
+//! - Windows: no widget webview in v0. Built-ins render as escaped React in main, as on Linux,
+//!   and agent-made widgets are off, so nothing would render there. Not attaching it also
+//!   keeps WebView2's subframe script injection out of reach. The isolation probe still
+//!   attaches one in test builds, to measure WebView2 for later.
 //! - Linux: no widget webview, since WebKitGTK can't place a child webview. Built-ins render
 //!   in main. Agent-made widgets are off.
 //!
@@ -33,22 +36,28 @@
 //! The commands are granted to `main` in capabilities/default.json. Through `invoke`:
 //! - `widgets_policy()` → [`PolicyInfo`]: whether a widget webview exists, where built-ins
 //!   render (`"widgets"` or `"main"`), and the agent-widget switch.
-//! - `widgets_show({ bounds })`: attach the widgets webview on first use, then place and
-//!   show it. `bounds` is `{ x, y, width, height }` in logical px relative to the window: the
-//!   Home grid's rect. Call it again on every layout change.
+//! - `widgets_show({ bounds })` (async): attach the widgets webview on first use, then place
+//!   and show it. `bounds` is `{ x, y, width, height }` in logical px relative to the window:
+//!   the Home grid's rect. Call it again on every layout change. It fails where
+//!   `widgetWebview` is false.
 //! - `widgets_hide()`: hide it while a main-window menu, modal or toast covers Home, since
 //!   the child webview always draws above main.
-//! - `widgets_mount({ widgets: [{ id, version, title }] })`: mount registered widgets. The
-//!   core builds their URLs; unknown IDs are skipped. It returns the IDs it mounted.
-//! - `widgets_push({ id, data })`: send a widget its data (`ToWidget` `data`, §5.2).
+//! - `widgets_mount({ widgets: [{ id, version, title }] })` (async): mount registered widgets.
+//!   The core builds their URLs; unknown IDs are skipped. It resolves once the host page has
+//!   mounted them, with the IDs it reports, and fails if the page doesn't answer. Mounted
+//!   widgets stay mounted across reloads of the widgets webview.
+//! - `widgets_push({ id, data })`: give a mounted widget its data (`ToWidget` `data`, §5.2).
+//!   The core keeps the latest per widget: it is sent now if the page is loaded, and again
+//!   after every reload. A frame whose port doesn't exist yet gets it once the port exists.
 //! - `widgets_register({ id, version, html })`: register widget HTML from the UI. It is
 //!   always treated as agent-made, so it is refused while the switch is off. Built-ins are
-//!   registered by the core, never by the UI.
+//!   registered by the core, never by the UI. An ID and version can be registered once.
 //! - The `widget-action` event, emitted to main only, carries each accepted action:
 //!   [`action::WidgetAction`] `{ widgetId, message }`, where `message` is a `FromWidget`.
 
 pub mod action;
 pub mod commands;
+pub mod state;
 
 use std::collections::HashMap;
 use std::fmt;
@@ -73,6 +82,11 @@ pub const ACTION_EVENT: &str = "widget-action";
 /// The CSP of a widget document (§5.3), sent as a header and repeated as its first `<meta>`:
 /// inline script and style only, no network, no frames, no forms and no base URL.
 pub const WIDGET_CSP: &str = "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data: blob:; font-src data:; connect-src 'none'; frame-src 'none'; form-action 'none'; base-uri 'none'";
+
+/// The widget CSP as the response header sends it: plus `sandbox allow-scripts`, which only
+/// a header can carry. A widget document then has an opaque origin wherever it loads, even
+/// as a top frame.
+pub const WIDGET_CSP_HEADER: &str = "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data: blob:; font-src data:; connect-src 'none'; frame-src 'none'; form-action 'none'; base-uri 'none'; sandbox allow-scripts";
 
 /// The CSP of the host page (§5.3). Its frames may load only the widget scheme, which also
 /// keeps a widget from navigating its own frame anywhere else. `connect-src 'self'` is for
@@ -162,9 +176,11 @@ pub const fn policy() -> Policy {
         }
     } else if cfg!(windows) {
         Policy {
-            widget_webview: true,
+            widget_webview: false,
             builtins: Placement::Main,
-            agent_widgets: Switch::Off("off on Windows until the isolation probe passes there"),
+            agent_widgets: Switch::Off(
+                "off on Windows: no widget webview in v0 until the isolation probe passes there",
+            ),
         }
     } else {
         Policy {
@@ -208,6 +224,10 @@ pub enum RegisterError {
     BuiltinsInMain,
     /// Agent-made and user-made widgets are off on this OS.
     AgentWidgetsOff(&'static str),
+    /// This ID and version are already registered: a document is never replaced.
+    AlreadyRegistered,
+    /// A built-in uses an HTML sink (see [`BUILTIN_HTML_SINKS`]).
+    UnsafeBuiltin(&'static str),
 }
 
 impl fmt::Display for RegisterError {
@@ -218,24 +238,48 @@ impl fmt::Display for RegisterError {
             Self::NoWidgetWebview => write!(f, "this OS has no widget webview in v0"),
             Self::BuiltinsInMain => write!(f, "built-ins render in main on this OS"),
             Self::AgentWidgetsOff(reason) => write!(f, "agent-made widgets are {reason}"),
+            Self::AlreadyRegistered => {
+                write!(f, "that widget id and version are already registered")
+            }
+            Self::UnsafeBuiltin(sink) => write!(
+                f,
+                "built-ins render connector text with textContent only; this one uses {sink}"
+            ),
         }
     }
 }
 
 impl std::error::Error for RegisterError {}
 
+/// 1-64 letters, digits, `-` or `_`, and not `host`, which names the host page's routes.
 pub(crate) fn valid_id(id: &str) -> bool {
     (1..=64).contains(&id.len())
+        && id != "host"
         && id
             .chars()
             .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
 }
 
+/// HTML sinks a built-in may not use while WebKit's preconnect still ignores CSP: a built-in
+/// renders connector text (Slack, email), and markup parsed from that text could reach the
+/// network through a `<link>`. Built-ins set text with `textContent` only. Lift this once
+/// the widgets webview has a deny-all network proxy.
+pub const BUILTIN_HTML_SINKS: &[&str] = &[
+    "innerHTML",
+    "outerHTML",
+    "insertAdjacentHTML",
+    "document.write",
+    "DOMParser",
+    "createContextualFragment",
+    "srcdoc",
+    "setHTMLUnsafe",
+];
+
 /// The widget documents the core serves, keyed by `<id>/<version>`, and the launch's host
 /// token (see [`action`]).
 pub struct Registry {
     policy: Policy,
-    docs: Mutex<HashMap<String, String>>,
+    docs: Mutex<HashMap<String, (Source, String)>>,
     host_token: String,
 }
 
@@ -296,7 +340,12 @@ impl Registry {
             }
             _ => {}
         }
-        self.insert(id, version, html)
+        if source == Source::Builtin
+            && let Some(sink) = BUILTIN_HTML_SINKS.iter().find(|sink| html.contains(**sink))
+        {
+            return Err(RegisterError::UnsafeBuiltin(sink));
+        }
+        self.insert(source, id, version, html)
     }
 
     /// Stores a document without consulting the policy. Only the isolation probe uses this,
@@ -305,37 +354,61 @@ impl Registry {
     #[cfg(feature = "e2e")]
     pub fn register_probe_fixture(
         &self,
+        source: Source,
         id: &str,
         version: u32,
         html: &str,
     ) -> Result<String, RegisterError> {
-        self.insert(id, version, html)
+        self.insert(source, id, version, html)
     }
 
-    fn insert(&self, id: &str, version: u32, html: &str) -> Result<String, RegisterError> {
+    fn insert(
+        &self,
+        source: Source,
+        id: &str,
+        version: u32,
+        html: &str,
+    ) -> Result<String, RegisterError> {
         if !valid_id(id) {
             return Err(RegisterError::BadId);
         }
         if html.len() > MAX_WIDGET_BYTES {
             return Err(RegisterError::TooLarge(html.len()));
         }
-        self.docs
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .insert(format!("{id}/{version}"), html.to_owned());
+        let mut docs = self.lock_docs();
+        let key = format!("{id}/{version}");
+        if docs.contains_key(&key) {
+            return Err(RegisterError::AlreadyRegistered);
+        }
+        docs.insert(key, (source, html.to_owned()));
         Ok(widget_url(id, version))
     }
 
-    pub(crate) fn contains(&self, id: &str, version: u32) -> bool {
-        self.document(&format!("{id}/{version}")).is_some()
-    }
-
-    fn document(&self, key: &str) -> Option<String> {
+    fn lock_docs(&self) -> std::sync::MutexGuard<'_, HashMap<String, (Source, String)>> {
         self.docs
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .get(key)
-            .cloned()
+    }
+
+    pub(crate) fn contains(&self, id: &str, version: u32) -> bool {
+        self.lock_docs().contains_key(&format!("{id}/{version}"))
+    }
+
+    /// Whether any version of `id` is registered: the action route takes nothing else.
+    pub(crate) fn has_id(&self, id: &str) -> bool {
+        let prefix = format!("{id}/");
+        self.lock_docs().keys().any(|key| key.starts_with(&prefix))
+    }
+
+    /// Who wrote a registered document.
+    pub fn source(&self, id: &str, version: u32) -> Option<Source> {
+        self.lock_docs()
+            .get(&format!("{id}/{version}"))
+            .map(|(source, _)| *source)
+    }
+
+    fn document(&self, key: &str) -> Option<String> {
+        self.lock_docs().get(key).map(|(_, html)| html.clone())
     }
 }
 
@@ -363,7 +436,11 @@ pub fn respond(
 ) -> (Response<Vec<u8>>, Option<action::WidgetAction>) {
     let path = request.uri().path();
     let is_host_route = path == "/host" || path.starts_with("/host/");
-    let csp = if is_host_route { HOST_CSP } else { WIDGET_CSP };
+    let csp = if is_host_route {
+        HOST_CSP
+    } else {
+        WIDGET_CSP_HEADER
+    };
     let reply = |status: StatusCode, content_type: &str, body: Vec<u8>| {
         Response::builder()
             .status(status)
@@ -402,7 +479,7 @@ pub fn respond(
             is_post: request.method() == tauri::http::Method::POST,
             body: request.body(),
         };
-        return match action::accept(&route, registry.host_token()) {
+        return match action::accept(&route, registry.host_token(), &|id| registry.has_id(id)) {
             Ok(accepted) => (text(StatusCode::ACCEPTED, "accepted"), Some(accepted)),
             Err(error) => (text(error.status(), &error.to_string()), None),
         };
@@ -504,8 +581,8 @@ pub enum HostFn {
 }
 
 /// The one way the core builds script for the host page: a fixed function, with every
-/// argument as serde_json output. No caller string is ever interpolated into script.
-/// For `Mount`, pass the entries and `registry.host_token()`; see [`mount_call`].
+/// argument as serde_json output. No caller string is ever interpolated into script. Only
+/// the page-load replay ([`state::HostState::page_finished`]) passes the host token.
 pub fn host_call(function: HostFn, args: &[Value]) -> String {
     let name = match function {
         HostFn::Mount => "mount",
@@ -516,15 +593,6 @@ pub fn host_call(function: HostFn, args: &[Value]) -> String {
         .map(|arg| serde_json::to_string(arg).unwrap_or_else(|_| "null".to_owned()))
         .collect();
     format!("window.__rlxHost.{name}({})", args.join(","))
-}
-
-/// `window.__rlxHost.mount(entries, token)`: the core's only way to mount widgets, and how
-/// the host page's top frame gets the launch's host token.
-pub fn mount_call(registry: &Registry, entries: Value) -> String {
-    host_call(
-        HostFn::Mount,
-        &[entries, Value::String(registry.host_token().to_owned())],
-    )
 }
 
 /// The `widgets` webview may stay on the widget scheme and nothing else (§5.3). wry asks this
@@ -566,7 +634,9 @@ impl fmt::Display for AttachError {
 impl std::error::Error for AttachError {}
 
 /// Adds the `widgets` child webview to `window` at `bounds`, loading the host page. Use
-/// `widgets_show` from the UI; this is the core's side of it.
+/// `widgets_show` from the UI; this is the core's side of it. Call it off the main thread
+/// and never from a synchronous command: `add_child` waits on the main thread, and on
+/// Windows that deadlocks a synchronous command.
 pub fn attach<R: Runtime>(
     window: &Window<R>,
     policy: Policy,
@@ -575,11 +645,42 @@ pub fn attach<R: Runtime>(
     if !policy.widget_webview {
         return Err(AttachError::NotOnThisOs);
     }
+    add_widgets_webview(window, bounds)
+}
+
+/// Attaches the widgets webview whatever the policy says. Only the isolation probe uses
+/// this, to measure WebView2 on Windows, where the product attaches none in v0.
+#[cfg(feature = "e2e")]
+pub fn attach_for_probe<R: Runtime>(
+    window: &Window<R>,
+    bounds: Bounds,
+) -> Result<Webview<R>, AttachError> {
+    add_widgets_webview(window, bounds)
+}
+
+fn add_widgets_webview<R: Runtime>(
+    window: &Window<R>,
+    bounds: Bounds,
+) -> Result<Webview<R>, AttachError> {
+    use tauri::Manager;
     let url = Url::parse(&format!("{SCHEME}://localhost/host/")).expect("static URL parses");
     let builder = WebviewBuilder::new(LABEL, WebviewUrl::CustomProtocol(url))
         .on_navigation(allow_navigation)
         .on_new_window(|_, _| tauri::webview::NewWindowResponse::Deny)
         .initialization_script_for_all_frames(FRAMES_JS)
+        // Every page load of the host page: replay the grid and the data ([`state`]).
+        .on_page_load(|webview, payload| {
+            let state = webview.state::<state::HostState>();
+            match payload.event() {
+                tauri::webview::PageLoadEvent::Started => state.page_started(),
+                tauri::webview::PageLoadEvent::Finished => {
+                    let replay = state.page_finished(&webview.state::<Registry>());
+                    if let Err(error) = webview.eval(replay) {
+                        eprintln!("widgets: replay after page load failed: {error}");
+                    }
+                }
+            }
+        })
         .transparent(true);
     window
         .add_child(
@@ -631,7 +732,8 @@ mod tests {
     fn v0_keeps_agent_widgets_off_on_every_os() {
         let policy = policy();
         assert!(matches!(policy.agent_widgets, Switch::Off(_)));
-        assert_eq!(policy.widget_webview, !cfg!(target_os = "linux"));
+        // Only macOS attaches a widget webview in v0; Windows and Linux render built-ins in main.
+        assert_eq!(policy.widget_webview, cfg!(target_os = "macos"));
         let builtins = if cfg!(target_os = "macos") {
             Placement::Widgets
         } else {
@@ -736,9 +838,14 @@ mod tests {
         let (response, action) = respond(&registry, None, LABEL, &get("/clock/2/"));
         assert!(action.is_none());
         assert_eq!(response.status(), StatusCode::OK);
+        // The header adds `sandbox allow-scripts`, which a <meta> can't carry.
         assert_eq!(
             response.headers()[header::CONTENT_SECURITY_POLICY],
-            WIDGET_CSP
+            WIDGET_CSP_HEADER
+        );
+        assert_eq!(
+            WIDGET_CSP_HEADER,
+            format!("{WIDGET_CSP}; sandbox allow-scripts")
         );
         let body = String::from_utf8(response.body().clone()).unwrap();
         let meta = format!(
@@ -842,6 +949,9 @@ mod tests {
     #[test]
     fn the_action_route_takes_actions_only_from_the_host_page_top_frame() {
         let registry = Registry::new(ON);
+        registry
+            .register(Source::Builtin, "clock", 1, "<p>clock</p>")
+            .unwrap();
         let refresh = br#"{"widgetId":"clock","message":{"type":"refresh","v":1}}"#.to_vec();
         let post = |token: Option<&str>, origin_header: Option<&str>| {
             let mut builder = Request::builder()
@@ -882,15 +992,68 @@ mod tests {
             assert!(accepted.is_none());
         }
         // The token reaches the host only through eval, never in a served resource.
-        for path in ["/host/", "/host/host.js"] {
+        for path in ["/host/", "/host/host.js", "/clock/1/"] {
             let (page, _) = respond(&registry, None, LABEL, &get(path));
             assert!(
                 !String::from_utf8_lossy(page.body()).contains(&token),
                 "{path}"
             );
         }
-        let call = mount_call(&registry, json!([]));
-        assert_eq!(call, format!("window.__rlxHost.mount([],\"{token}\")"));
+        // An action for a widget that isn't registered is refused.
+        let mut spoofed = post(Some(&token), None);
+        *spoofed.body_mut() =
+            br#"{"widgetId":"timer","message":{"type":"refresh","v":1}}"#.to_vec();
+        let (response, accepted) = respond(&registry, None, LABEL, &spoofed);
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        assert!(accepted.is_none());
+    }
+
+    #[test]
+    fn a_registered_document_is_never_replaced_and_keeps_its_source() {
+        let registry = Registry::new(ON);
+        registry
+            .register(Source::Builtin, "clock", 1, "<p>a</p>")
+            .unwrap();
+        for source in [Source::Builtin, Source::Agent, Source::User] {
+            assert_eq!(
+                registry.register(source, "clock", 1, "<p>b</p>"),
+                Err(RegisterError::AlreadyRegistered)
+            );
+        }
+        assert_eq!(registry.source("clock", 1), Some(Source::Builtin));
+        assert!(
+            registry
+                .register(Source::Agent, "clock", 2, "<p>v2</p>")
+                .is_ok()
+        );
+        assert_eq!(registry.source("clock", 2), Some(Source::Agent));
+        assert!(registry.has_id("clock") && !registry.has_id("clo"));
+        let (page, _) = respond(&registry, None, LABEL, &get("/clock/1/"));
+        assert!(String::from_utf8_lossy(page.body()).ends_with("<p>a</p>"));
+    }
+
+    #[test]
+    fn the_id_host_is_reserved() {
+        let registry = Registry::new(ON);
+        assert_eq!(
+            registry.register(Source::Builtin, "host", 1, "<p>x</p>"),
+            Err(RegisterError::BadId)
+        );
+    }
+
+    #[test]
+    fn built_ins_may_not_use_html_sinks_while_preconnect_is_open() {
+        let registry = Registry::new(ON);
+        for sink in BUILTIN_HTML_SINKS {
+            let html = format!("<script>el.{sink} = text</script>");
+            assert_eq!(
+                registry.register(Source::Builtin, "slack", 1, &html),
+                Err(RegisterError::UnsafeBuiltin(sink)),
+                "{sink}"
+            );
+        }
+        let safe = "<script>el.textContent = text</script>";
+        assert!(registry.register(Source::Builtin, "slack", 1, safe).is_ok());
     }
 
     #[test]
