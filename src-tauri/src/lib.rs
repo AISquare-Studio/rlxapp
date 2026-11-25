@@ -7,6 +7,7 @@ mod e2e;
 // Test builds are debug builds (`npm run e2e:build`); a release never carries it.
 #[cfg(all(feature = "e2e", not(debug_assertions)))]
 compile_error!("the e2e feature is for debug test builds only (npm run e2e:build)");
+pub mod engine_home;
 mod probe;
 pub mod widget_host;
 

@@ -415,7 +415,7 @@ a {
 
 .dot--queued {
   background: transparent;
-  border: var(--rlx-border-width) solid var(--rlx-muted);
+  border: var(--rlx-border-width) solid var(--rlx-border-strong);
 }
 
 .dot--done {
@@ -477,19 +477,19 @@ a {
 
 .button--primary {
   background: var(--rlx-primary);
-  border-color: var(--rlx-primary);
+  border-color: transparent;
   color: var(--rlx-on-primary);
 }
 
 .button--warning {
   background: var(--rlx-warning);
-  border-color: var(--rlx-warning);
+  border-color: transparent;
   color: var(--rlx-on-primary);
 }
 
 .button--danger {
   background: var(--rlx-error);
-  border-color: var(--rlx-error);
+  border-color: transparent;
   color: var(--rlx-on-primary);
 }
 
@@ -650,11 +650,13 @@ input[type="color"] {
   background: var(--rlx-warning);
 }
 
+/* An accent swatch shows the colour itself, passed in as --swatch. */
 .swatch {
   width: 12px;
   height: 12px;
   border-radius: 50%;
   border: var(--rlx-border-width) solid var(--rlx-border-color);
+  background: var(--swatch);
 }
 
 .switch {
@@ -1130,35 +1132,33 @@ input[type="color"] {
 }
 
 .state {
-  display: inline-block;
-  min-width: 78px;
-  padding: var(--rlx-space-1) var(--rlx-space-2);
+  display: inline-flex;
+  align-items: center;
+  gap: var(--rlx-space-1);
+  padding: 0 var(--rlx-space-2);
   border-radius: var(--rlx-radius-pill);
+  background: var(--rlx-chip-bg);
+  color: var(--rlx-foreground);
   font-size: var(--rlx-text-sm);
-  font-weight: 700;
-  text-align: center;
-  border: var(--rlx-border-width) solid currentcolor;
+  font-weight: 600;
+  white-space: nowrap;
 }
 
-.state--queued {
-  color: var(--rlx-muted);
+/* A state is a small dot, never a coloured outline. */
+.state::before,
+.agent-state::before {
+  content: "";
+  width: 7px;
+  height: 7px;
+  flex: none;
+  border-radius: 50%;
+  background: var(--rlx-border-strong);
 }
 
-.state--running {
-  color: var(--rlx-success);
-}
 
-.state--needs-you {
-  color: var(--rlx-warning);
-}
 
-.state--done {
-  color: var(--rlx-primary);
-}
 
-.state--failed {
-  color: var(--rlx-error);
-}
+
 
 .needs-you-box {
   padding: var(--rlx-space-3);
@@ -1337,23 +1337,6 @@ input[type="color"] {
   font-weight: 600;
 }
 
-.agent-state--live {
-  color: var(--rlx-success);
-}
-
-.agent-state--waiting,
-.agent-state--paused {
-  color: var(--rlx-warning);
-}
-
-.agent-state--exited {
-  color: var(--rlx-muted);
-}
-
-.agent-state--lost {
-  color: var(--rlx-error);
-}
-
 .kanban {
   display: grid;
   grid-template-columns: repeat(5, minmax(150px, 1fr));
@@ -1525,6 +1508,22 @@ input[type="color"] {
 .theme-card__swatches span {
   width: 24px;
   height: 28px;
+}
+
+.swatch-background {
+  background: var(--rlx-background);
+}
+
+.swatch-panel {
+  background: var(--rlx-panel);
+}
+
+.swatch-primary {
+  background: var(--rlx-primary);
+}
+
+.swatch-accent {
+  background: var(--rlx-accent);
 }
 
 .risk {
@@ -1723,7 +1722,7 @@ input[type="color"] {
 
 .avatar--manager {
   background: var(--rlx-primary);
-  border-color: var(--rlx-primary);
+  border-color: transparent;
   color: var(--rlx-on-primary);
 }
 
@@ -1748,8 +1747,7 @@ input[type="color"] {
 }
 
 .avatar__status--asleep {
-  background: var(--rlx-surface);
-  border-color: var(--rlx-muted);
+  background: var(--rlx-border-strong);
 }
 
 .avatar__status--paused {
@@ -1771,32 +1769,42 @@ input[type="color"] {
   vertical-align: middle;
 }
 
-/* Chip text stays foreground or muted (4.5:1 on every card); the state colour is the border and dot. */
-.agent-state--running {
-  color: var(--rlx-foreground);
-}
-
-.agent-state--running::before {
-  content: "";
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: var(--rlx-success);
-}
-
-.agent-state--scheduled {
+/*
+ * State chips (Runs, Fleet, Agents): neutral text (4.5:1 on every card), and the state is a
+ * small dot. Green only for running/live, red only for failed/lost.
+ */
+.agent-state {
   color: var(--rlx-foreground);
 }
 
 .agent-state--asleep,
 .agent-state--paused,
+.agent-state--exited,
+.state--queued,
 .mode-chip--silent,
 .turn-chip {
   color: var(--rlx-muted);
 }
 
-.agent-state--paused {
-  border-style: dashed;
+.state--running::before,
+.agent-state--running::before,
+.agent-state--live::before {
+  background: var(--rlx-success);
+}
+
+.agent-state--scheduled::before,
+.state--done::before {
+  background: var(--rlx-primary);
+}
+
+.state--needs-you::before,
+.agent-state--waiting::before {
+  background: var(--rlx-warning);
+}
+
+.state--failed::before,
+.agent-state--lost::before {
+  background: var(--rlx-error);
 }
 
 .mode-chip--loud,
@@ -1812,7 +1820,7 @@ input[type="color"] {
 .demo-tag {
   margin-left: var(--rlx-space-1);
   padding: 0 var(--rlx-space-1);
-  border: var(--rlx-border-width) solid currentcolor;
+  background: var(--rlx-chip-bg);
   border-radius: var(--rlx-radius-xs);
   font-size: var(--rlx-text-sm);
   font-weight: 600;

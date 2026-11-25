@@ -92,10 +92,10 @@ export function Settings({ osDark }: { osDark: boolean }) {
               <label key={f.family} className={`theme-card${s.family === f.family ? " is-active" : ""}`}>
                 <input type="radio" name="theme-family" value={f.family} checked={s.family === f.family} onChange={() => updateSettings({ family: f.family as ThemeFamily })} />
                 <span className="theme-card__swatches" data-theme={resolveTheme(f.family, s.mode, osDark).name} aria-hidden="true">
-                  <span style={{ background: "var(--rlx-background)" }} />
-                  <span style={{ background: "var(--rlx-panel)" }} />
-                  <span style={{ background: "var(--rlx-primary)" }} />
-                  <span style={{ background: "var(--rlx-accent)" }} />
+                  <span className="swatch-background" />
+                  <span className="swatch-panel" />
+                  <span className="swatch-primary" />
+                  <span className="swatch-accent" />
                 </span>
                 {f.label}
               </label>
@@ -124,7 +124,7 @@ export function Settings({ osDark }: { osDark: boolean }) {
             {ACCENT_PRESETS.map((p) => (
               <label key={p.id} className={`segmented__option${s.accent.kind === "preset" && s.accent.id === p.id ? " is-active" : ""}`}>
                 <input type="radio" name="accent" checked={s.accent.kind === "preset" && s.accent.id === p.id} onChange={() => updateSettings({ accent: { kind: "preset", id: p.id } })} />
-                <span className="swatch" style={{ background: theme.dark ? p.dark : p.light }} aria-hidden="true" />
+                <span className="swatch" style={{ ["--swatch" as string]: theme.dark ? p.dark : p.light }} aria-hidden="true" />
                 {p.label}
               </label>
             ))}
