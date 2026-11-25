@@ -9,11 +9,12 @@ on:
     branches: [main, "rc/**"]
   workflow_dispatch:
 
-# Cancel superseded runs on the same branch or PR. As in rlx, runs are grouped by
-# event too, so a push and a run by hand on the same ref don't cancel each other.
+# Cancel superseded PR runs only. As in rlx, runs are grouped by event too, so a push
+# and a run by hand on the same ref don't cancel each other. Push runs on main and
+# rc/** are the merge gates, so a newer push queues behind them and never cancels them.
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
@@ -31,7 +32,8 @@ env:
 #             - idle memory: on Windows and Linux, scripts/idle-memory.mjs (private
 #               working set and PSS); on macOS, scripts/measure-budgets.sh
 #               (phys_footprint, plus installer size and cold start);
-#             - the installer sizes.
+#             - the installer size gate: fails if a .dmg, .msi, setup .exe, .deb
+#               or .rpm is over 25,000,000 bytes (the AppImage is report-only).
 #           The jobs then upload the installers as run artifacts.
 #   ci-ok   passes only when every app job did: the one check for branch protection
 #           to require, however many legs there are.
@@ -151,14 +153,17 @@ jobs:
         if: runner.os == 'Windows' && hashFiles('src-tauri/Cargo.toml') != ''
         run: node scripts/idle-memory.mjs "${{ matrix.binary }}"
 
-      - name: Installer sizes
+      - name: Installer size gate (<= 25 MB)
         if: hashFiles('src-tauri/Cargo.toml') != ''
         run: |
-          node scripts/installer-sizes.mjs | tee sizes.md
+          status=0
+          node scripts/installer-sizes.mjs > sizes.md || status=$?
+          cat sizes.md
           {
             echo "### Installers (${{ matrix.name }}); budget <= 25 MB"
             cat sizes.md
           } >> "$GITHUB_STEP_SUMMARY"
+          exit "$status"
 
       - name: Measure budgets (informational)
         if: runner.os == 'macOS' && hashFiles('src-tauri/Cargo.toml') != ''
