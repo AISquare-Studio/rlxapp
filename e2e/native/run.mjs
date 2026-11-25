@@ -41,7 +41,12 @@ if (!values.only || values.only === "screens") {
   if (os === "macos") {
     console.log("screens: macOS has no WebDriver for WKWebView; run scripts/mac-native-check.sh for the native checks.");
   } else {
-    failed ||= !(await runScreens());
+    try {
+      failed ||= !(await runScreens());
+    } catch (error) {
+      console.error(`FAIL  screens: ${error.message ?? error}`);
+      failed = true;
+    }
   }
 }
 process.exit(failed ? 1 : 0);
