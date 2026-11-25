@@ -1,9 +1,14 @@
 //! rlxapp core: the Tauri process that hosts the web UI.
 
+#[cfg(feature = "e2e")]
+mod e2e;
 mod probe;
+pub mod widget_host;
 
 use probe::Probe;
 use serde::Serialize;
+use tauri::http::{Request, Response};
+use tauri::{Emitter, Manager, Runtime, UriSchemeContext};
 
 /// The user-facing app name. Must equal `productName` in tauri.conf.json (checked by a test);
 /// the crate and repository keep the name `rlxapp`.
@@ -49,11 +54,77 @@ fn report_first_paint(
         .map_err(|error| error.to_string())
 }
 
+/// Serves the widget scheme (src/widget_host/). Test builds add the isolation probe's routes.
+fn widget_scheme<R: Runtime>(
+    ctx: UriSchemeContext<'_, R>,
+    request: Request<Vec<u8>>,
+) -> Response<Vec<u8>> {
+    let app = ctx.app_handle();
+    let registry = app.state::<widget_host::Registry>();
+    #[cfg(feature = "e2e")]
+    let probe = app.try_state::<e2e::Probe>();
+    #[cfg(feature = "e2e")]
+    let extras = probe
+        .as_ref()
+        .map(|probe| probe.inner() as &dyn widget_host::HostExtras);
+    #[cfg(not(feature = "e2e"))]
+    let extras = None;
+    let (response, action) = widget_host::respond(&registry, extras, ctx.webview_label(), &request);
+    if let Some(action) = action {
+        #[cfg(feature = "e2e")]
+        if let Some(probe) = &probe {
+            probe.record_action(&action);
+        }
+        let main = tauri::EventTarget::webview("main");
+        if let Err(error) = app.emit_to(main, widget_host::ACTION_EVENT, &action) {
+            eprintln!("widget action not delivered: {error}");
+        }
+    }
+    response
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
+    let builder = tauri::Builder::default()
         .manage(Probe::from_env())
-        .invoke_handler(tauri::generate_handler![app_info, report_first_paint])
+        .manage(widget_host::Registry::default())
+        .manage(widget_host::state::HostState::default())
+        .register_uri_scheme_protocol(widget_host::SCHEME, widget_scheme);
+
+    #[cfg(not(feature = "e2e"))]
+    let builder = builder.invoke_handler(tauri::generate_handler![
+        app_info,
+        report_first_paint,
+        widget_host::commands::widgets_policy,
+        widget_host::commands::widgets_show,
+        widget_host::commands::widgets_hide,
+        widget_host::commands::widgets_mount,
+        widget_host::commands::widgets_push,
+        widget_host::commands::widgets_register
+    ]);
+
+    // Test builds: the isolation probe's state, canary command and hooks (src/e2e/).
+    #[cfg(feature = "e2e")]
+    let builder = builder
+        .manage(e2e::Probe::from_env())
+        .invoke_handler(tauri::generate_handler![
+            app_info,
+            report_first_paint,
+            widget_host::commands::widgets_policy,
+            widget_host::commands::widgets_show,
+            widget_host::commands::widgets_hide,
+            widget_host::commands::widgets_mount,
+            widget_host::commands::widgets_push,
+            widget_host::commands::widgets_register,
+            e2e::e2e_canary
+        ])
+        .on_page_load(e2e::page_loaded)
+        .setup(|app| {
+            e2e::setup(app)?;
+            Ok(())
+        });
+
+    builder
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
@@ -109,7 +180,17 @@ mod tests {
         );
         assert_eq!(
             capability["permissions"],
-            serde_json::json!(["core:default", "allow-app-info", "allow-report-first-paint"])
+            serde_json::json!([
+                "core:default",
+                "allow-app-info",
+                "allow-report-first-paint",
+                "allow-widgets-policy",
+                "allow-widgets-show",
+                "allow-widgets-hide",
+                "allow-widgets-mount",
+                "allow-widgets-push",
+                "allow-widgets-register"
+            ])
         );
     }
 
