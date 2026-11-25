@@ -8,7 +8,7 @@ import { AppProvider } from "../state/AppProvider.tsx";
 import { DEFAULT_SETTINGS } from "../state/model.ts";
 import { AgentFrame, AGENT_WIDGET_SANDBOX } from "./AgentWidget.tsx";
 import { GmailWidget, SlackDigestWidget } from "./ConnectorWidgets.tsx";
-import { PomodoroWidget, TimerWidget } from "./TimeWidgets.tsx";
+import { ClockWidget, PomodoroWidget, TimerWidget } from "./TimeWidgets.tsx";
 
 const settings = { ...DEFAULT_SETTINGS, onboarded: true };
 
@@ -45,6 +45,21 @@ describe("time widgets", () => {
     act(() => vi.advanceTimersByTime(25 * 60 * 1000));
     expect(screen.getByText("Break")).toBeTruthy();
     expect(screen.getByText("Sessions done today: 1")).toBeTruthy();
+  });
+
+  it("shows the clock in hours and minutes, so an idle Home repaints once a minute, not every second", () => {
+    // A seconds display kept WebKit's GPU process at ~139 MB on an idle Home; minutes let it drop to ~16 MB.
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(2026, 10, 25, 9, 41, 7));
+    wrap(<ClockWidget />);
+    const text = () => screen.getByTestId("clock-time").textContent ?? "";
+    expect(text()).not.toMatch(/:\d{2}:\d{2}/);
+    expect(text()).toMatch(/41/);
+    const before = text();
+    act(() => vi.advanceTimersByTime(20_000));
+    expect(text()).toBe(before);
+    act(() => vi.advanceTimersByTime(40_000));
+    expect(text()).toMatch(/42/);
   });
 
   it("runs a timer", () => {

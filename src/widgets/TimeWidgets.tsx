@@ -4,13 +4,17 @@ import { useApp } from "../state/context.ts";
 import { Icon } from "../ui/Icon.tsx";
 import { formatClock } from "./time.ts";
 
+/**
+ * Hours and minutes only: calmer than a ticking seconds display, and the page repaints once a
+ * minute instead of every second, which lets WebKit release idle graphics memory.
+ */
 export function ClockWidget() {
-  const now = useNow(1000);
+  const now = useNow(5_000);
   const date = new Date(now);
   return (
     <div className="clock">
       <div className="clock__time" data-testid="clock-time">
-        {date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })}
+        {date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
       </div>
       <div className="clock__date">{date.toLocaleDateString([], { weekday: "long", month: "long", day: "numeric" })}</div>
     </div>
