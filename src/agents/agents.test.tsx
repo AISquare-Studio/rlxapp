@@ -188,6 +188,43 @@ describe("Start of day", () => {
     expect(within(reply).getByText(/I'm free Tuesday at 11:00/)).toBeTruthy();
   });
 
+  it("signs every draft as the personal agent, never as the helper agent that drafted it", async () => {
+    // Owner decision (2026-11-25): always the personal agent's name, whichever helper did the work.
+    const expected = "— Atlas, Sam Rivera's AI Agent";
+    renderApp({ ...onboarded, agentName: "Atlas" });
+    await confirmStartOfDay();
+    fireEvent.click(await screen.findByRole("button", { name: "Start of day, Scheduled 09:00" }));
+    fireEvent.click(await screen.findByRole("button", { name: /Simulate 9:00/ }));
+    const messages = screen.getByTestId("messages");
+    const draft = await within(messages).findByTestId("email-draft-card");
+    // The helper posts as itself in its channel…
+    expect(within(messages).getAllByText("Start of day", { selector: ".message__meta strong" }).length).toBeGreaterThan(0);
+    // …but what goes out is signed by the personal agent.
+    expect(within(draft).getByTestId("sign-off").textContent).toBe(expected);
+
+    const ask = within(messages).getByTestId("needs-context-card");
+    fireEvent.click(within(ask).getByRole("button", { name: "Thursday afternoon" }));
+    const reply = within(messages).getAllByTestId("email-draft-card").at(-1)!;
+    expect(within(reply).getByText("To Aiko Tanaka")).toBeTruthy();
+    expect(within(reply).getByTestId("sign-off").textContent).toBe(expected);
+
+    fireEvent.click(within(draft).getByRole("button", { name: "Approve" }));
+    fireEvent.click(within(draft).getByRole("button", { name: /Send/ }));
+    expect(within(draft).getByText(expected)).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Approvals" }));
+    const drafts = await screen.findByTestId("drafts");
+    const aiko = within(drafts).getByText("To Aiko Tanaka").closest("li") as HTMLElement;
+    expect(within(aiko).getByTestId("sign-off").textContent).toBe(expected);
+    fireEvent.click(screen.getByRole("tab", { name: /Activity/ }));
+    const activity = await screen.findByTestId("activity");
+    const sent = within(activity).getByText(/I'll bring the updated forecast on Thursday/).closest("li") as HTMLElement;
+    expect(within(sent).getByTestId("activity-sign-off").textContent).toBe(expected);
+    for (const signOff of [...document.querySelectorAll("[data-testid='sign-off'], [data-testid='activity-sign-off']")]) {
+      expect(signOff.textContent).not.toMatch(/Start of day|Slack agent|Gmail agent|Meetings agent|GTM agent/);
+    }
+  });
+
   it("holds a send for 10 seconds with Undo when the connector is on Auto", async () => {
     renderApp({ ...onboarded, sendModes: { ...onboarded.sendModes, "claude.ai Gmail": "auto" } });
     await confirmStartOfDay();

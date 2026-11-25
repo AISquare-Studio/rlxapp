@@ -211,7 +211,11 @@ export const DEFAULT_SETTINGS: Settings = {
   agents: [],
 };
 
-/** The sign-off the core appends to every send: `— <Agent>, <Owner>'s AI Agent`. */
+/**
+ * The sign-off the core appends to every send: `— <Agent>, <Owner>'s AI Agent`. `<Agent>` is
+ * ALWAYS the owner's personal agent (Settings › Your agent), whichever helper agent (Start of
+ * day, the Slack agent, …) drafted the message (owner decision, 2026-11-25).
+ */
 export function signOffText(agentName: string, ownerName: string): string {
   return `— ${agentName || "Your agent"}, ${ownerName || "you"}'s AI Agent`;
 }
