@@ -12,7 +12,7 @@
 //    outputs, which this desktop app doesn't ship.
 //
 // The mark's path data is copied verbatim; only its placement changes.
-// src/brand/brand.test.ts checks that every generated SVG carries the logo's paths
+// src/brand/brand.test.tsx checks that every generated SVG carries the logo's paths
 // unchanged.
 import { spawnSync } from "node:child_process";
 import { readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";

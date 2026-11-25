@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Permissions for the main window. App commands (app_info, report_first_paint) are allowed by default; plugins must be added here explicitly.",
-  "windows": ["main"],
-  "permissions": ["core:default"]
+  "description": "Grants for the main webview only: Tauri's core defaults and the app's two commands. It names the webview, not the window, so a child webview added to the main window later (e.g. widgets) inherits nothing; any other webview needs its own capability.",
+  "webviews": ["main"],
+  "permissions": ["core:default", "allow-app-info", "allow-report-first-paint"]
 }

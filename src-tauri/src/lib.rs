@@ -97,4 +97,53 @@ mod tests {
         let package = json(include_str!("../../package.json"));
         assert_eq!(package["version"], env!("CARGO_PKG_VERSION"));
     }
+
+    #[test]
+    fn capability_grants_the_main_webview_only_core_and_the_app_commands() {
+        let capability = json(include_str!("../capabilities/default.json"));
+        // A webview, never a window: a window grant would leak to child webviews (widgets).
+        assert_eq!(capability["webviews"], serde_json::json!(["main"]));
+        assert!(
+            capability.get("windows").is_none(),
+            "grant webviews, not windows"
+        );
+        assert_eq!(
+            capability["permissions"],
+            serde_json::json!(["core:default", "allow-app-info", "allow-report-first-paint"])
+        );
+    }
+
+    #[test]
+    fn main_csp_allows_no_frames_objects_base_or_forms() {
+        let config = json(include_str!("../tauri.conf.json"));
+        let csp = config["app"]["security"]["csp"]
+            .as_object()
+            .expect("CSP is set as an object");
+        for directive in ["frame-src", "object-src", "base-uri", "form-action"] {
+            assert_eq!(csp[directive], "'none'", "{directive}");
+        }
+        assert_eq!(csp["default-src"], "'self'");
+        assert_eq!(csp["style-src"], "'self'");
+        for (directive, sources) in csp {
+            let sources = sources.as_str().unwrap_or_default();
+            assert!(!sources.contains("'unsafe-"), "{directive}: {sources}");
+            assert!(!sources.contains('*'), "{directive}: {sources}");
+        }
+    }
+
+    #[test]
+    fn linux_packages_are_named_rlxapp_but_the_desktop_entry_says_rlx() {
+        // The deb/rpm package name follows productName; keep it off the rlx CLI's name.
+        let linux = json(include_str!("../tauri.linux.conf.json"));
+        assert_eq!(linux["productName"], "rlxapp");
+        let template = "linux/rlx.desktop";
+        assert_eq!(linux["bundle"]["linux"]["deb"]["desktopTemplate"], template);
+        assert_eq!(linux["bundle"]["linux"]["rpm"]["desktopTemplate"], template);
+        let desktop = include_str!("../linux/rlx.desktop");
+        assert!(
+            desktop
+                .lines()
+                .any(|line| line == format!("Name={PRODUCT_NAME}"))
+        );
+    }
 }

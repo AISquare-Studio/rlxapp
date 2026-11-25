@@ -25,8 +25,7 @@
       "warn",
       {
         "allow": [
-          "__APP_VERSION__",
-          "__TAURI_INTERNALS__"
+          "__APP_VERSION__"
         ]
       }
     ],

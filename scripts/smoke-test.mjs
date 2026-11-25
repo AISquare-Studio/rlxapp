@@ -7,7 +7,7 @@
 // src-tauri/src/probe.rs) and passes only if both of these hold:
 //   - the web UI painted its first frame and reported it over IPC, which proves that
 //     the webview (WebKit, WebView2 or WebKitGTK) loaded the bundled frontend; and
-//   - the process is still alive after --min-seconds.
+//   - the process is still alive --min-seconds after that first paint.
 // It fails if the app exits or crashes, or if it doesn't paint within --paint-timeout.
 import { existsSync } from "node:fs";
 import { resolve } from "node:path";
@@ -45,17 +45,21 @@ async function finish(code, message) {
   process.exit(code);
 }
 
+let paintedAt = 0;
 try {
   const paint = await app.waitForPaint(paintTimeoutMs);
+  paintedAt = app.startedAt + paint.atMs;
   console.log(`smoke: first paint reported after ~${paint.atMs} ms (${paint.source})`);
 } catch (error) {
   await finish(1, `FAIL: ${error.message}${app.exited ? " before its first paint" : ""}`);
 }
 
-while (Date.now() - app.startedAt < minMs) {
-  if (app.exited) await finish(1, `FAIL: ${describeExit(app.exited, Date.now() - app.startedAt)}`);
+// The uptime requirement counts from the first paint, not from launch.
+while (Date.now() - paintedAt < minMs) {
+  if (app.exited) await finish(1, `FAIL: ${describeExit(app.exited, Date.now() - app.startedAt)} (after its first paint)`);
   await sleep(100);
 }
-if (app.exited) await finish(1, `FAIL: ${describeExit(app.exited, Date.now() - app.startedAt)}`);
+if (app.exited) await finish(1, `FAIL: ${describeExit(app.exited, Date.now() - app.startedAt)} (after its first paint)`);
 
-await finish(0, `PASS: painted and stayed up for ${((Date.now() - app.startedAt) / 1000).toFixed(1)} s`);
+const upAfterPaint = ((Date.now() - paintedAt) / 1000).toFixed(1);
+await finish(0, `PASS: painted after ${paintedAt - app.startedAt} ms and stayed up ${upAfterPaint} s after that`);
