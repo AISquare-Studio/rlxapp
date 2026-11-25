@@ -33,8 +33,9 @@ import {
   SLACK_DIGEST,
   TASK_SCRIPTS,
   AGENT_WIDGET_HTML,
+  BRIEFING,
 } from "./data.ts";
-import { CHAT_PREFIX } from "../runs.ts";
+import { AGENT_PREFIX, BRIEFING_ROLE, CHAT_PREFIX } from "../runs.ts";
 
 export type ClaudeMock = "not-installed" | "signed-out" | "signed-in";
 
@@ -48,6 +49,8 @@ interface RunRecord {
   timers: ReturnType<typeof setTimeout>[];
   /** Steps still to stream, for tasks. */
   pending: string[];
+  /** Milliseconds between this run's steps, if not the engine's. */
+  stepMs?: number;
   failureReason?: string;
 }
 
@@ -68,7 +71,8 @@ export class FakeEngine implements Engine, DeveloperEngine {
   private readonly stepMs: number;
   private readonly now: () => number;
   private counter = 0;
-  private slackFetches = 0;
+  /** New Slack messages the next fetch finds; the first fetch finds 3. */
+  private slackNew = 3;
 
   constructor(options: FakeEngineOptions = {}) {
     this.stepMs = options.stepMs ?? 1400;
@@ -81,6 +85,11 @@ export class FakeEngine implements Engine, DeveloperEngine {
   /** Switches the mock Claude Code state shown during onboarding. */
   setClaudeState(state: ClaudeMock): void {
     this.claude = state;
+  }
+
+  /** Makes the next Slack fetch find `count` new messages, so it takes a model turn. */
+  simulateNewSlack(count = 3): void {
+    this.slackNew = count;
   }
 
   claudeState(): ClaudeMock {
@@ -138,11 +147,13 @@ export class FakeEngine implements Engine, DeveloperEngine {
   run(req: RunRequest): Promise<RunId> {
     if (this.records.has(req.id)) return Promise.reject(new Error(`run_exists: ${req.id}`));
     const record = this.create(req, "queued", this.now());
-    if (req.kind === "task" && !req.prompt.startsWith(CHAT_PREFIX)) {
+    if (req.kind === "task" && !req.prompt.startsWith(CHAT_PREFIX) && !req.prompt.startsWith(AGENT_PREFIX)) {
       record.pending = [...(TASK_SCRIPTS[record.title] ?? TASK_SCRIPTS.default ?? [])];
       this.schedule();
     } else {
-      this.later(record, 300, () => this.finishInstant(record));
+      // An agent run takes a moment, so its "running" state shows; the briefing a little longer.
+      const delay = !req.prompt.startsWith(AGENT_PREFIX) ? 300 : req.prompt.includes(BRIEFING_ROLE) ? 2 * this.stepMs : this.stepMs;
+      this.later(record, delay, () => this.finishInstant(record));
     }
     this.changed();
     return Promise.resolve(req.id);
@@ -289,7 +300,7 @@ export class FakeEngine implements Engine, DeveloperEngine {
       if (!record.events.some((e) => e.event.type === "started")) {
         this.emit(record, { type: "started", connectors: this.mountedConnectors(record) });
       }
-      this.later(record, this.stepMs, () => this.step(record));
+      this.later(record, record.stepMs ?? this.stepMs, () => this.step(record));
     }
     this.changed();
   }
@@ -299,12 +310,15 @@ export class FakeEngine implements Engine, DeveloperEngine {
     const next = record.pending.shift();
     if (next === undefined) {
       record.state = "done";
-      this.emit(record, { type: "finished", status: "done", output: { status: "done", summary: record.title } });
+      const output = record.title.startsWith(AGENT_PREFIX)
+        ? { outcome: "Posted this week's pipeline notes", modelTurn: true }
+        : { status: "done", summary: record.title };
+      this.emit(record, { type: "finished", status: "done", output });
       this.schedule();
       return;
     }
     this.emit(record, { type: "text", delta: next });
-    this.later(record, this.stepMs, () => this.step(record));
+    this.later(record, record.stepMs ?? this.stepMs, () => this.step(record));
   }
 
   private finishInstant(record: RunRecord): void {
@@ -317,16 +331,31 @@ export class FakeEngine implements Engine, DeveloperEngine {
         manifest: { schemaVersion: 1, id: `agent-${record.req.id.slice(0, 6)}`, version: 1, title: record.title },
         html: AGENT_WIDGET_HTML,
       };
+    } else if (record.req.prompt.startsWith(AGENT_PREFIX)) {
+      const id = record.req.prompt.slice(AGENT_PREFIX.length).split(/\s/)[0] ?? "";
+      if (record.req.prompt.includes(BRIEFING_ROLE)) {
+        for (const line of ["Read Meetings, Gmail and Slack outcomes.", "Merged 2 duplicates.", "Re-prioritized 9 items."]) {
+          this.emit(record, { type: "text", delta: line });
+        }
+        output = BRIEFING;
+      } else if (id === "slack-agent" && this.slackNew > 0) {
+        output = { outcome: `Claude reviewed ${this.slackNew} new`, modelTurn: true };
+        this.slackNew = 0;
+      } else {
+        output = { outcome: "Fetched, nothing new, no Claude usage", modelTurn: false };
+      }
     } else if (connector.includes("Slack")) {
-      // The first fetch finds 5 new messages and takes a model turn; later ones find nothing new.
-      output = { ...SLACK_DIGEST, reviewed: this.slackFetches === 0 ? 5 : 0 };
-      this.slackFetches += 1;
+      // Each interval fetches with no model turn; Claude reviews only what's new.
+      output = { ...SLACK_DIGEST, reviewed: this.slackNew };
+      this.slackNew = 0;
     } else if (connector.includes("Gmail")) {
       output = GMAIL;
     } else if (connector.includes("Linear")) {
       output = LINEAR_FEED;
     } else if (/pull request/i.test(record.req.prompt)) {
       output = OPEN_PRS;
+    } else if (record.req.kind === "parse_instruction") {
+      output = parseInstruction(record.req.prompt);
     } else if (record.req.kind === "check") {
       output = { verdict: "match", reason: "The body matches the approval." };
     } else {
@@ -373,10 +402,71 @@ export class FakeEngine implements Engine, DeveloperEngine {
     this.emit(needs, { type: "text", delta: "Sorted 21 emails: 2 need replies." });
     this.emit(needs, { type: "question", text: "Tom asks about clause 7. Should I accept it as written, or ask for a 30-day notice period?" });
 
+    // The GTM agent is mid-run when the app opens, so the Agents section shows one running.
+    const gtm = mk(`${AGENT_PREFIX}gtm-agent GTM agent`, "queued", 6);
+    gtm.req = { ...gtm.req, mount: { kind: "connectors", connectors: ["Slack", "Gmail"] }, persist: false };
+    gtm.stepMs = this.stepMs * 8;
+    gtm.pending = [
+      "Reading #sales and #gtm since Friday.",
+      "Matching 6 open deals to their email threads.",
+      "Northwind: intro call today; Aiko's intro is unanswered.",
+      "Two deals have no reply in 5 days.",
+      "Drafting this week's pipeline notes.",
+      "Checking the notes against last week's.",
+      "Done.",
+    ];
+
     const running = mk("Weekly status report", "queued", 5);
     running.pending = [...(TASK_SCRIPTS["Weekly status report"] ?? [])];
     mk("Prepare the Q4 deck outline", "queued", 2).pending = [...(TASK_SCRIPTS.default ?? [])];
     mk("Find a slot for the Northwind call", "queued", 1).pending = [...(TASK_SCRIPTS.default ?? [])];
     this.schedule();
   }
+}
+
+/**
+ * The mock of the manager's ParseInstruction run: it proposes an agent from what the owner typed.
+ * Connectors are suggestions the owner edits; nothing is hard-wired.
+ */
+export function parseInstruction(text: string): {
+  role?: "briefing";
+  purpose: string;
+  name: string;
+  connectors: string[];
+  schedule: { kind: "weekdays" | "daily" | "interval"; at?: string; everyMin?: number };
+  mode: "silent" | "loud";
+  outputs: ("channel" | "widget" | "dashboard")[];
+  reply: string;
+} {
+  const lower = text.toLowerCase();
+  const time = /\b(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\b/.exec(lower);
+  let at = "09:00";
+  if (time) {
+    let hour = Number(time[1]);
+    if (time[3] === "pm" && hour < 12) hour += 12;
+    at = `${String(hour).padStart(2, "0")}:${time[2] ?? "00"}`;
+  }
+  const weekdays = /weekday|every day of the week|mon(day)?.{0,4}fri/.test(lower);
+  if (/start of (the )?day|briefing|morning/.test(lower)) {
+    return {
+      role: "briefing",
+      purpose: "Gathers your agents' latest outcomes, removes duplicates, and re-prioritizes them into one briefing.",
+      name: "Start of day",
+      connectors: ["Google Calendar", "Meet transcripts (Google Drive)", "Gmail", "Slack"],
+      schedule: { kind: weekdays || !/daily|every day/.test(lower) ? "weekdays" : "daily", at },
+      mode: "loud",
+      outputs: ["channel", "dashboard"],
+      reply: "Here's what I'd set up. Change anything, then confirm.",
+    };
+  }
+  const connectors = ["Slack", "Gmail", "Linear", "Google Calendar"].filter((c) => lower.includes(c.toLowerCase().split(" ")[0] ?? ""));
+  return {
+    purpose: text.trim(),
+    name: "New agent",
+    connectors: connectors.length ? connectors : ["Slack"],
+    schedule: { kind: weekdays ? "weekdays" : "daily", at },
+    mode: "silent",
+    outputs: ["channel"],
+    reply: "Here's a first version. Change anything, then confirm.",
+  };
 }

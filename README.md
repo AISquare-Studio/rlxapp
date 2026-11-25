@@ -31,7 +31,7 @@ rlx is a [Tauri 2](https://v2.tauri.app) app. The Rust core lives in `src-tauri/
 | `cargo test` / `cargo clippy --all-targets -- -D warnings` | Test and lint the core (run in `src-tauri/`) |
 | `npm run smoke -- <binary>` | Launch a built binary and check that it paints and stays up for 5 s |
 | `npm run icons` | Regenerate the app icons, tray icons and favicon from `src/assets/rlx-logo.svg` |
-| `npm run e2e` | Browser checks of the UI shell in Chromium (Playwright; run `npx playwright install chromium` once) |
+| `npm run e2e:web` | Browser checks of the UI shell in the browser preview, in Chromium (Playwright, `e2e/web`; run `npx playwright install chromium` once) |
 | `npm run gallery` | Capture every screen in the rlx and rlx light themes into `docs/gallery/` |
 | `scripts/measure-budgets.sh` | macOS: installer size, cold start and idle memory (phys_footprint) against the budgets |
 | `node scripts/idle-memory.mjs <binary>` | Windows/Linux: idle memory (private working set / PSS), as CI runs it |

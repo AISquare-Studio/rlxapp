@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useReducer, type ReactNode } from "react";
 import type { DeveloperEngine, Engine } from "../engine/types.ts";
 import type { Platform } from "../platform/index.ts";
-import { AppContext, type AppContextValue } from "./context.ts";
+import { AppContext, type AppContextValue, type DemoControls } from "./context.ts";
 import { signOffText, type Screen, type Settings, type Toast } from "./model.ts";
 import { STORAGE_KEY, initialState, loadSettings, reducer } from "./reducer.ts";
 
@@ -11,21 +11,25 @@ export interface AppProviderProps {
   platform: Platform;
   initialSettings?: Settings;
   now?: () => number;
+  demo?: DemoControls;
+  /** Save settings to localStorage (default). Off while measuring the budgets. */
+  persist?: boolean;
   children: ReactNode;
 }
 
 let toastCounter = 0;
 
-export function AppProvider({ engine, developer, platform, initialSettings, now = Date.now, children }: AppProviderProps) {
+export function AppProvider({ engine, developer, platform, initialSettings, now = Date.now, demo, persist = true, children }: AppProviderProps) {
   const [state, dispatch] = useReducer(reducer, undefined, () => initialState(initialSettings ?? loadSettings(), now()));
 
   useEffect(() => {
+    if (!persist) return;
     try {
       globalThis.localStorage?.setItem(STORAGE_KEY, JSON.stringify(state.settings));
     } catch {
       // Storage can be unavailable (private mode); settings then last for the session.
     }
-  }, [state.settings]);
+  }, [state.settings, persist]);
 
   const navigate = useCallback((screen: Screen) => dispatch({ type: "navigate", screen }), []);
   const updateSettings = useCallback((patch: Partial<Settings>) => dispatch({ type: "settings", patch }), []);
@@ -49,8 +53,9 @@ export function AppProvider({ engine, developer, platform, initialSettings, now 
       toast,
       signOff: signOffText(state.settings.agentName, state.settings.ownerName),
       now,
+      demo,
     }),
-    [state, engine, developer, platform, navigate, updateSettings, toast, now],
+    [state, engine, developer, platform, navigate, updateSettings, toast, now, demo],
   );
 
   return <AppContext.Provider value={value}>{children}</AppContext.Provider>;

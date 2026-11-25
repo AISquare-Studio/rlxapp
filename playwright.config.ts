@@ -1,8 +1,9 @@
 import { defineConfig, devices } from "@playwright/test";
 
-// Browser checks of the UI shell, run against the Vite dev server (`npm run e2e`).
+// Browser checks of the UI shell in the browser preview (Vite + FakeEngine): `npm run e2e:web`.
+// `npm run e2e` is the native tauri-driver suite (task #16).
 export default defineConfig({
-  testDir: "e2e",
+  testDir: "e2e/web",
   timeout: 30_000,
   fullyParallel: true,
   reporter: process.env.CI ? "github" : "list",

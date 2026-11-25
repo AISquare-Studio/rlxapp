@@ -2,15 +2,17 @@ import { useEffect, useMemo, useState } from "react";
 import { Splash } from "./brand/Splash.tsx";
 import { FakeEngine } from "./engine/fake/FakeEngine.ts";
 import type { Platform } from "./platform/index.ts";
+import { Agents } from "./screens/Agents.tsx";
 import { Approvals } from "./screens/Approvals.tsx";
-import { Chat } from "./screens/Chat.tsx";
+import { Channel } from "./screens/Channel.tsx";
 import { Board, Fleet, Panes } from "./screens/Developer.tsx";
 import { Home } from "./screens/Home.tsx";
 import { Onboarding } from "./screens/Onboarding.tsx";
+import { Runs } from "./screens/Runs.tsx";
 import { Settings } from "./screens/Settings.tsx";
-import { Tasks } from "./screens/Tasks.tsx";
 import { Shell } from "./shell/Shell.tsx";
 import { AppProvider } from "./state/AppProvider.tsx";
+import { loadSettings } from "./state/reducer.ts";
 import { useApp } from "./state/context.ts";
 import type { Settings as AppSettings } from "./state/model.ts";
 import { effectiveAccent, resolveTheme } from "./theme/themes.ts";
@@ -26,22 +28,24 @@ export interface AppProps {
 
 export function App({ platform, engine: given, initialSettings }: AppProps) {
   const engine = useMemo(() => given ?? new FakeEngine(), [given]);
-  const [ready, setReady] = useState(false);
+  const demo = useMemo(() => ({ simulateNewSlack: (count?: number) => engine.simulateNewSlack(count) }), [engine]);
+  const [boot, setBoot] = useState<{ measuring: boolean } | null>(null);
 
   useEffect(() => {
     let active = true;
-    engine
-      .hello()
-      .then(() => active && setReady(true))
+    Promise.all([engine.hello(), platform.appInfo().catch(() => null)])
+      .then(([, info]) => active && setBoot({ measuring: info?.measuring ?? false }))
       .catch((error: unknown) => console.error("engine hello failed", error));
     return () => {
       active = false;
     };
-  }, [engine]);
+  }, [engine, platform]);
 
-  if (!ready) return <Splash />;
+  if (!boot) return <Splash />;
+  // A budget measurement opens on Home and saves nothing (scripts/measure-budgets.sh).
+  const settings = boot.measuring ? { ...(initialSettings ?? loadSettings()), onboarded: true } : initialSettings;
   return (
-    <AppProvider engine={engine} developer={engine} platform={platform} initialSettings={initialSettings}>
+    <AppProvider engine={engine} developer={engine} platform={platform} initialSettings={settings} demo={demo} persist={!boot.measuring}>
       <Root engine={engine} />
     </AppProvider>
   );
@@ -61,7 +65,7 @@ function Root({ engine }: { engine: FakeEngine }) {
     root.style.colorScheme = theme.dark ? "dark" : "light";
   }, [theme, accent, density]);
 
-  const devScreen = screen.name === "fleet" || screen.name === "board" || screen.name === "panes";
+  const devScreen = screen.name === "runs" || screen.name === "fleet" || screen.name === "board" || screen.name === "panes";
   useEffect(() => {
     if (devScreen && !devMode) navigate({ name: "home" });
   }, [devScreen, devMode, navigate]);
@@ -81,9 +85,10 @@ function Root({ engine }: { engine: FakeEngine }) {
   return (
     <Shell>
       {screen.name === "home" ? <Home /> : null}
-      {screen.name === "tasks" ? <Tasks /> : null}
+      {screen.name === "agents" ? <Agents /> : null}
+      {screen.name === "channel" ? <Channel key={screen.id} id={screen.id} /> : null}
       {screen.name === "approvals" ? <Approvals /> : null}
-      {screen.name === "chat" ? <Chat /> : null}
+      {devMode && screen.name === "runs" ? <Runs /> : null}
       {screen.name === "settings" ? <Settings osDark={osDark} /> : null}
       {devMode && screen.name === "fleet" ? <Fleet /> : null}
       {devMode && screen.name === "board" ? <Board /> : null}

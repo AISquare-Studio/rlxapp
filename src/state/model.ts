@@ -1,12 +1,18 @@
-/** The app's own state: settings, the mock core's drafts and approvals, and navigation. */
+/** The app's own state: settings, agents, conversations, the mock core's drafts and approvals, and navigation. */
 import type { ThemeFamily } from "../theme/themes.ts";
+import type { Agent, AgentMode, AgentOutput, Schedule } from "./agents.ts";
 
+/**
+ * Screens. The app is a chat app (owner, 2026-11-25): agents are channels, the manager is a
+ * DM, and raw run logs show only in Developer mode ("runs").
+ */
 export type Screen =
   | { name: "home" }
-  | { name: "tasks"; runId?: string }
+  | { name: "agents" }
+  | { name: "channel"; id: string }
   | { name: "approvals"; tab: "drafts" | "standing" | "activity" }
-  | { name: "chat" }
   | { name: "settings"; section?: "send-safety" | "appearance" | "agent" | "developer" | "about" }
+  | { name: "runs"; runId?: string }
   | { name: "fleet" }
   | { name: "board" }
   | { name: "panes"; agentId?: string };
@@ -41,14 +47,20 @@ export interface Settings {
   devMode: boolean;
   sendModes: Record<string, SendMode>;
   slackIntervalMin: number;
+  /** The rlx home the engine adapter uses; empty means the sandbox (~/.rlx-sandbox). */
+  engineHome: string;
   keySenders: string[];
   widgets: WidgetInstance[];
+  /** The user's agents: app-owned definitions the scheduler fires (architecture §6). */
+  agents: Agent[];
 }
 
 export type DraftOrigin = "task" | "approval" | "widget" | "dataJob";
 
 export interface Draft {
   id: string;
+  /** pending → approved (the owner said yes) → held (Auto's 10 s hold) → sent. */
+  status: "pending" | "approved" | "held";
   origin: DraftOrigin;
   connector: string;
   destination: string;
@@ -82,6 +94,69 @@ export interface ActivityItem {
   approvedBy: "owner" | "standing approval" | "auto";
 }
 
+/** A link back to the message an item came from. */
+export interface SourceLink {
+  label: string;
+  connector: string;
+  url: string;
+}
+
+export interface PriorityItem {
+  id: string;
+  text: string;
+  why?: string;
+  sources: SourceLink[];
+}
+
+export interface Proposal {
+  role?: "briefing";
+  purpose: string;
+  name: string;
+  connectors: string[];
+  schedule: Schedule;
+  mode: AgentMode;
+  outputs: AgentOutput[];
+}
+
+/** Rich message cards: what a non-developer sees instead of tool logs. */
+export type Card =
+  | { type: "email-draft"; draftId: string }
+  | {
+      type: "needs-context";
+      id: string;
+      question: string;
+      to: string;
+      subject: string;
+      connector: string;
+      sources: SourceLink[];
+      /** The reply draft, with the owner's answer in place of `{answer}`. */
+      draftTemplate: string;
+      answered?: string;
+    }
+  | { type: "checklist"; title: string; items: { text: string; done: boolean }[] }
+  | { type: "priority"; title: string; doNow: PriorityItem[]; today: PriorityItem[]; waiting: PriorityItem[] }
+  | { type: "promise"; text: string; due: string; meeting: string; sources: SourceLink[] }
+  | { type: "proposal"; id: string; proposal: Proposal; status: "proposed" | "confirmed" | "cancelled" };
+
+export interface Message {
+  id: string;
+  /** An agent id, or "manager" for the setup assistant's DM. */
+  channel: string;
+  /** "system" lines are run outcomes ("Woke · fetched, nothing new"); they don't count as unread. */
+  from: "owner" | "agent" | "system";
+  at: number;
+  text?: string;
+  card?: Card;
+}
+
+/** A mock system notification, as a loud run would fire. */
+export interface Notice {
+  id: string;
+  title: string;
+  body: string;
+  channel: string;
+}
+
 export interface Toast {
   id: string;
   text: string;
@@ -98,6 +173,12 @@ export interface AppState {
   toasts: Toast[];
   aboutOpen: boolean;
   rightPanel: boolean;
+  messages: Message[];
+  /** The Home dashboard's "Start of day" section, from the latest loud run. */
+  briefing: { at: number; card: Extract<Card, { type: "priority" }> } | null;
+  notices: Notice[];
+  /** Unread agent messages, by channel. */
+  unread: Record<string, number>;
 }
 
 export const CONNECTOR_NAMES = ["claude.ai Slack", "claude.ai Gmail", "claude.ai Linear"] as const;
@@ -124,8 +205,10 @@ export const DEFAULT_SETTINGS: Settings = {
   devMode: false,
   sendModes: { "claude.ai Slack": "draft", "claude.ai Gmail": "draft", "claude.ai Linear": "draft" },
   slackIntervalMin: 15,
+  engineHome: "",
   keySenders: ["Tom Okafor", "Lena Fischer", "Board Office"],
   widgets: DEFAULT_WIDGETS,
+  agents: [],
 };
 
 /** The sign-off the core appends to every send: `— <Agent>, <Owner>'s AI Agent`. */
@@ -137,12 +220,14 @@ export function screenTitle(screen: Screen): string {
   switch (screen.name) {
     case "home":
       return "Home";
-    case "tasks":
-      return "Tasks";
+    case "agents":
+      return "Agents";
+    case "channel":
+      return "Chat";
     case "approvals":
       return "Approvals";
-    case "chat":
-      return "Chat";
+    case "runs":
+      return "Runs";
     case "settings":
       return "Settings";
     case "fleet":

@@ -84,18 +84,26 @@ export function useEngineData<T>(kind: RunKind, prompt: string, mount: Mount, ev
   const start = useCallback(() => {
     stop.current();
     let active = true;
+    let finished = false;
     let off: () => void = () => {};
+    const id = newRunId();
     stop.current = () => {
       active = false;
       off();
+      // A refresh nobody waits for any more is cancelled, not left to spend a turn.
+      if (!finished) void engine.cancel(id).catch(() => {});
     };
     const parsedMount = JSON.parse(mountKey) as Mount;
     const needs = parsedMount.kind === "connectors" ? parsedMount.connectors : [];
     engine
-      .run({ id: newRunId(), kind, prompt, mount: parsedMount, needsConnectors: needs, persist: false })
-      .then((id) => {
-        if (!active) return;
+      .run({ id, kind, prompt, mount: parsedMount, needsConnectors: needs, persist: false })
+      .then(() => {
+        if (!active) {
+          if (!finished) void engine.cancel(id).catch(() => {});
+          return;
+        }
         off = engine.attach(id, 1, ({ event }) => {
+          if (event.type === "finished") finished = true;
           if (!active || event.type !== "finished") return;
           if (event.status === "done" && event.output !== undefined && event.output !== null) {
             setData(event.output as T);

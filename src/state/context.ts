@@ -4,6 +4,12 @@ import type { Platform } from "../platform/index.ts";
 import type { Action } from "./reducer.ts";
 import type { AppState, Screen, Settings, Toast } from "./model.ts";
 
+/** Demo controls the FakeEngine offers; absent on a real engine. */
+export interface DemoControls {
+  /** Makes the next Slack fetch find new messages, so it takes a model turn. */
+  simulateNewSlack(count?: number): void;
+}
+
 export interface AppContextValue {
   state: AppState;
   screen: Screen;
@@ -16,6 +22,7 @@ export interface AppContextValue {
   toast: (text: string, tone?: Toast["tone"]) => void;
   signOff: string;
   now: () => number;
+  demo?: DemoControls;
 }
 
 export const AppContext = createContext<AppContextValue | null>(null);

@@ -40,3 +40,11 @@ describe("source rules", () => {
     expect(appCss).toMatch(/:focus-visible\s*\{\s*outline: 2px solid var\(--rlx-primary\)/);
   });
 });
+
+describe("engine home", () => {
+  it("never names the owner's real rlx home in source, outside the guard that refuses it", () => {
+    const real = new RegExp(["\\.", "aisquare\\b"].join(""));
+    const offenders = files.filter(([path, text]) => path !== "/src/engine/adapter/home.ts" && real.test(text)).map(([path]) => path);
+    expect(offenders).toEqual([]);
+  });
+});

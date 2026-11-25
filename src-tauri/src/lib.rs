@@ -40,6 +40,9 @@ pub struct AppInfo {
     pub version: &'static str,
     pub os: &'static str,
     pub arch: &'static str,
+    /// Launched under the startup probe (scripts/measure-budgets.sh): the UI then opens on Home
+    /// without saving settings, so the budgets are measured on Home, not onboarding.
+    pub measuring: bool,
 }
 
 impl AppInfo {
@@ -49,6 +52,7 @@ impl AppInfo {
             version: env!("CARGO_PKG_VERSION"),
             os: std::env::consts::OS,
             arch: std::env::consts::ARCH,
+            measuring: std::env::var_os(probe::ENV_VAR).is_some(),
         }
     }
 }
@@ -248,7 +252,7 @@ mod tests {
         let json = serde_json::to_value(AppInfo::current()).unwrap();
         let mut keys: Vec<_> = json.as_object().unwrap().keys().cloned().collect();
         keys.sort();
-        assert_eq!(keys, ["arch", "name", "os", "version"]);
+        assert_eq!(keys, ["arch", "measuring", "name", "os", "version"]);
     }
 
     #[test]

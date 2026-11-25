@@ -1,9 +1,13 @@
+import { MANAGER_ID, seedAgents, type Agent } from "./agents.ts";
 import {
   DEFAULT_SETTINGS,
   signOffText,
   type ActivityItem,
   type AppState,
+  type Card,
   type Draft,
+  type Message,
+  type Notice,
   type Screen,
   type Settings,
   type StandingApproval,
@@ -28,6 +32,16 @@ export type Action =
   | { type: "approval-revoke"; id: string }
   | { type: "toast"; toast: Toast }
   | { type: "toast-dismiss"; id: string }
+  | { type: "draft-status"; id: string; status: Draft["status"] }
+  | { type: "draft-send"; id: string; at: number; approvedBy: ActivityItem["approvedBy"] }
+  | { type: "agent-add"; agent: Agent }
+  | { type: "agent-update"; id: string; patch: Partial<Agent> }
+  | { type: "message-add"; message: Message }
+  | { type: "message-card"; id: string; card: Card }
+  | { type: "message-append"; id: string; text: string }
+  | { type: "briefing"; at: number; card: Extract<Card, { type: "priority" }> }
+  | { type: "notice"; notice: Notice }
+  | { type: "notice-dismiss"; id: string }
   | { type: "about"; open: boolean }
   | { type: "right-panel"; open: boolean };
 
@@ -40,12 +54,12 @@ export function reducer(state: AppState, action: Action): AppState {
     case "navigate": {
       if (sameScreen(state.history[state.index], action.screen)) return state;
       const history = [...state.history.slice(0, state.index + 1), action.screen].slice(-50);
-      return { ...state, history, index: history.length - 1 };
+      return markRead({ ...state, history, index: history.length - 1 });
     }
     case "back":
-      return state.index > 0 ? { ...state, index: state.index - 1 } : state;
+      return state.index > 0 ? markRead({ ...state, index: state.index - 1 }) : state;
     case "forward":
-      return state.index < state.history.length - 1 ? { ...state, index: state.index + 1 } : state;
+      return state.index < state.history.length - 1 ? markRead({ ...state, index: state.index + 1 }) : state;
     case "settings":
       return { ...state, settings: { ...state.settings, ...action.patch } };
     case "widget-add":
@@ -70,21 +84,38 @@ export function reducer(state: AppState, action: Action): AppState {
       return { ...state, drafts: state.drafts.map((d) => (d.id === action.id ? { ...d, body: action.body } : d)) };
     case "draft-discard":
       return { ...state, drafts: state.drafts.filter((d) => d.id !== action.id) };
-    case "draft-approve": {
-      const draft = state.drafts.find((d) => d.id === action.id);
-      if (!draft) return state;
-      const item: ActivityItem = {
-        id: `act-${draft.id}`,
-        at: action.at,
-        connector: draft.connector,
-        destination: draft.destination,
-        subject: draft.subject,
-        body: draft.body,
-        signOff: signOffText(state.settings.agentName, state.settings.ownerName),
-        approvedBy: "owner",
+    case "draft-approve":
+      return send(state, action.id, action.at, "owner");
+    case "draft-send":
+      return send(state, action.id, action.at, action.approvedBy);
+    case "draft-status":
+      return { ...state, drafts: state.drafts.map((d) => (d.id === action.id ? { ...d, status: action.status } : d)) };
+    case "agent-add":
+      return { ...state, settings: { ...state.settings, agents: [...state.settings.agents, action.agent] } };
+    case "agent-update":
+      return {
+        ...state,
+        settings: {
+          ...state.settings,
+          agents: state.settings.agents.map((a) => (a.id === action.id ? { ...a, ...action.patch } : a)),
+        },
       };
-      return { ...state, drafts: state.drafts.filter((d) => d.id !== action.id), activity: [item, ...state.activity] };
+    case "message-add": {
+      const current = state.history[state.index];
+      const here = current?.name === "channel" && current.id === action.message.channel;
+      const unread = action.message.from === "agent" && !here ? { ...state.unread, [action.message.channel]: (state.unread[action.message.channel] ?? 0) + 1 } : state.unread;
+      return { ...state, messages: [...state.messages, action.message], unread };
     }
+    case "message-append":
+      return { ...state, messages: state.messages.map((m) => (m.id === action.id ? { ...m, text: (m.text ?? "") + action.text } : m)) };
+    case "message-card":
+      return { ...state, messages: state.messages.map((m) => (m.id === action.id ? { ...m, card: action.card } : m)) };
+    case "briefing":
+      return { ...state, briefing: { at: action.at, card: action.card } };
+    case "notice":
+      return { ...state, notices: [...state.notices, action.notice].slice(-3) };
+    case "notice-dismiss":
+      return { ...state, notices: state.notices.filter((n) => n.id !== action.id) };
     case "approval-revoke":
       return {
         ...state,
@@ -112,12 +143,37 @@ export function loadSettings(): Settings {
   }
 }
 
+/** Opening a channel marks its messages read. */
+function markRead(state: AppState): AppState {
+  const screen = state.history[state.index];
+  if (screen?.name !== "channel" || !state.unread[screen.id]) return state;
+  return { ...state, unread: { ...state.unread, [screen.id]: 0 } };
+}
+
+/** Sends a draft: it leaves the queue and enters the activity log with the sign-off. */
+function send(state: AppState, id: string, at: number, approvedBy: ActivityItem["approvedBy"]): AppState {
+  const draft = state.drafts.find((d) => d.id === id);
+  if (!draft) return state;
+  const item: ActivityItem = {
+    id: `act-${draft.id}`,
+    at,
+    connector: draft.connector,
+    destination: draft.destination,
+    subject: draft.subject,
+    body: draft.body,
+    signOff: signOffText(state.settings.agentName, state.settings.ownerName),
+    approvedBy,
+  };
+  return { ...state, drafts: state.drafts.filter((d) => d.id !== id), activity: [item, ...state.activity] };
+}
+
 const HOUR = 3_600_000;
 
 export function initialState(settings: Settings, now: number): AppState {
   const drafts: Draft[] = [
     {
       id: "d-seed-1",
+      status: "pending",
       origin: "task",
       connector: "claude.ai Slack",
       destination: "#launch",
@@ -162,8 +218,17 @@ export function initialState(settings: Settings, now: number): AppState {
       approvedBy: "owner",
     },
   ];
+  const messages: Message[] = [
+    {
+      id: "m-manager-hello",
+      channel: MANAGER_ID,
+      from: "agent",
+      at: now - 2 * HOUR,
+      text: `Hi ${settings.ownerName.split(" ")[0] ?? ""}, I set up your agents. Tell me what you want done and when, and I'll propose an agent for it. Try: “Every weekday at 9, give me a start of day briefing.”`,
+    },
+  ];
   return {
-    settings,
+    settings: settings.agents.length ? settings : { ...settings, agents: seedAgents(now) },
     history: [{ name: "home" }],
     index: 0,
     drafts,
@@ -171,7 +236,11 @@ export function initialState(settings: Settings, now: number): AppState {
     activity,
     toasts: [],
     aboutOpen: false,
-    rightPanel: false,
+    rightPanel: true,
+    messages,
+    briefing: null,
+    notices: [],
+    unread: {},
   };
 }
 

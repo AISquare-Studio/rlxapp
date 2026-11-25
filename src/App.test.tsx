@@ -47,30 +47,50 @@ describe("App", () => {
     expect(await screen.findByText("Signed in", { selector: "strong" })).toBeTruthy();
   });
 
-  it("shows every main screen from the rail, with Developer mode only while it is on", async () => {
+  it("lays out like a chat app: spaces, channels and DMs, the conversation and a detail panel", async () => {
     await renderApp(onboarded);
-    const rail = await screen.findByRole("navigation", { name: "Sections" });
+    const spaces = await screen.findByRole("navigation", { name: "Spaces" });
+    expect(within(spaces).getByRole("button", { name: "Home" })).toBeTruthy();
+    const dms = screen.getByRole("list", { name: "Direct messages" });
+    expect(within(dms).getByRole("button", { name: "Manager, setup assistant" })).toBeTruthy();
+    const channels = screen.getByRole("list", { name: "Agent channels" });
+    expect(within(channels).getByRole("button", { name: "Slack agent, Asleep" })).toBeTruthy();
+    expect(within(channels).getByRole("button", { name: "Meetings agent, Scheduled 08:45" })).toBeTruthy();
+    expect(await within(channels).findByRole("button", { name: "GTM agent, Running" })).toBeTruthy();
+    expect(screen.getByRole("complementary", { name: "Details" })).toBeTruthy();
+    fireEvent.click(within(channels).getByRole("button", { name: "Slack agent, Asleep" }));
+    expect(await screen.findByRole("heading", { level: 1, name: "# slack-agent" })).toBeTruthy();
+    expect(screen.getByRole("textbox", { name: "Message Slack agent" })).toBeTruthy();
+    expect(within(screen.getByTestId("agent-details")).getByText("Every 15 min")).toBeTruthy();
+  });
+
+  it("shows every screen, with Developer (runs, fleet, board, panes) only while it is on", async () => {
+    await renderApp(onboarded);
+    const spaces = await screen.findByRole("navigation", { name: "Spaces" });
     for (const [label, heading] of [
-      ["Tasks", "Tasks"],
+      ["Agents", "Agents"],
       ["Approvals", "Approvals"],
-      ["Chat", "Chat with Nova"],
-      ["Settings", "Settings"],
-      ["Home", "Home"],
+      ["Dashboard", "Home"],
     ] as const) {
-      fireEvent.click(within(rail).getByRole("button", { name: label }));
+      fireEvent.click(screen.getByRole("button", { name: label }));
       expect(await screen.findByRole("heading", { level: 1, name: heading })).toBeTruthy();
     }
-    expect(within(rail).queryByRole("button", { name: "Fleet" })).toBeNull();
-    fireEvent.click(within(rail).getByRole("button", { name: "Settings" }));
+    fireEvent.click(within(spaces).getByRole("button", { name: "New agent" }));
+    expect(await screen.findByRole("heading", { level: 1, name: "Manager" })).toBeTruthy();
+    fireEvent.click(within(spaces).getByRole("button", { name: "Settings" }));
+    expect(await screen.findByRole("heading", { level: 1, name: "Settings" })).toBeTruthy();
+    expect(within(spaces).queryByRole("button", { name: "Developer" })).toBeNull();
     fireEvent.click(screen.getByRole("switch"));
+    fireEvent.click(within(spaces).getByRole("button", { name: "Developer" }));
+    expect(await screen.findByRole("heading", { level: 1, name: "Runs" })).toBeTruthy();
     for (const label of ["Fleet", "Board", "Panes"]) {
-      fireEvent.click(within(rail).getByRole("button", { name: label }));
+      fireEvent.click(within(screen.getByRole("navigation", { name: /navigation$/ })).getByRole("button", { name: label }));
       expect(await screen.findByRole("heading", { level: 1, name: label })).toBeTruthy();
     }
     expect(screen.getByRole("button", { name: /Open in terminal/ })).toBeTruthy();
-    fireEvent.click(within(rail).getByRole("button", { name: "Settings" }));
+    fireEvent.click(within(spaces).getByRole("button", { name: "Settings" }));
     fireEvent.click(screen.getByRole("switch"));
-    expect(within(rail).queryByRole("button", { name: "Fleet" })).toBeNull();
+    expect(within(spaces).queryByRole("button", { name: "Developer" })).toBeNull();
   });
 
   it("moves an approved draft to the activity log with the sign-off", async () => {
@@ -111,9 +131,9 @@ describe("App", () => {
     expect(document.documentElement.style.getPropertyValue("--rlx-accent")).toBe("#6A3FC8");
   });
 
-  it("streams a task's log and cancels it", async () => {
-    const engine = await renderApp(onboarded);
-    fireEvent.click(await screen.findByRole("button", { name: "Tasks" }));
+  it("streams a run's raw log and cancels it, in Developer mode only", async () => {
+    const engine = await renderApp({ ...onboarded, devMode: true });
+    fireEvent.click(await screen.findByRole("button", { name: "Developer" }));
     fireEvent.change(screen.getByLabelText("New task"), { target: { value: "Draft the launch email" } });
     fireEvent.click(screen.getByRole("button", { name: /New task/ }));
     expect(await screen.findByRole("heading", { level: 1, name: "Draft the launch email" })).toBeTruthy();
@@ -135,5 +155,14 @@ describe("App", () => {
     const about = screen.getByRole("dialog", { name: "About rlx" });
     expect([...about.querySelectorAll("path")].map((p) => p.getAttribute("d"))).toContain(RLX_MARK_PATHS[0]);
     expect(await within(about).findByText(/browser preview/)).toBeTruthy();
+  });
+});
+
+describe("budget measurement", () => {
+  it("opens on Home and saves nothing when launched under the startup probe", async () => {
+    const platform = { ...browserPlatform, appInfo: () => browserPlatform.appInfo().then((info) => ({ ...info, measuring: true })) };
+    render(<App platform={platform} engine={new FakeEngine({ stepMs: 50 })} />);
+    expect(await screen.findByRole("heading", { level: 1, name: "Home" })).toBeTruthy();
+    expect(localStorage.getItem("rlx.settings.v1")).toBeNull();
   });
 });

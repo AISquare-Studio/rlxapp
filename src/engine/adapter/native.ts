@@ -10,6 +10,8 @@ export interface NativeAppInfo {
   version: string;
   os: string;
   arch: string;
+  /** Launched under the startup probe, to measure the budgets. */
+  measuring: boolean;
 }
 
 export function nativeAppInfo(): Promise<NativeAppInfo> {

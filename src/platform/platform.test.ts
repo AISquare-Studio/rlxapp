@@ -23,6 +23,7 @@ describe("detectPlatform", () => {
       os: "browser",
       arch: "n/a",
       runtime: "browser",
+      measuring: false,
     });
     await expect(platform.reportFirstPaint(1, "fcp")).resolves.toBeUndefined();
   });
@@ -40,7 +41,7 @@ describe("nativePlatform", () => {
     mockIPC((cmd) => {
       calls.push(cmd);
       if (cmd === "app_info") {
-        return { name: "rlx", version: "0.1.0", os: "linux", arch: "x86_64" };
+        return { name: "rlx", version: "0.1.0", os: "linux", arch: "x86_64", measuring: true };
       }
       throw new Error(`unexpected command ${cmd}`);
     });
@@ -50,6 +51,7 @@ describe("nativePlatform", () => {
       version: "0.1.0",
       os: "linux",
       arch: "x86_64",
+      measuring: true,
       runtime: "native",
     });
     expect(calls).toEqual(["app_info"]);

@@ -1,5 +1,10 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { useAgents } from "../agents/useAgents.ts";
+import { PriorityCard } from "../chat/Cards.tsx";
+import { useNow } from "../engine/hooks.ts";
+import { MANAGER_ID, agentStatus, scheduleLabel, wakeLabel } from "../state/agents.ts";
 import { useApp } from "../state/context.ts";
+import { useOverlayCount } from "../ui/overlays.ts";
 import type { WidgetInstance, WidgetType } from "../state/model.ts";
 import { Icon } from "../ui/Icon.tsx";
 import { Modal } from "../ui/Modal.tsx";
@@ -42,9 +47,71 @@ function titleOf(widget: WidgetInstance, agentName: string): string {
   }
 }
 
+/** The "Start of day" dashboard section: the briefing agent's latest output, or how to get one. */
+function StartOfDay() {
+  const { state, navigate, demo } = useApp();
+  const { agents, running, wake, simulateNine } = useAgents();
+  const now = useNow(30_000);
+  const agent = agents.find((a) => a.role === "briefing");
+  const briefing = state.briefing;
+  if (!agent) {
+    return (
+      <section className="briefing briefing--empty" aria-label="Start of day">
+        <div>
+          <h2>Start of day</h2>
+          <p className="muted">Get one prioritized list each morning from your Meetings, Gmail and Slack agents. Ask the manager to set it up.</p>
+        </div>
+        <button type="button" className="button button--primary" onClick={() => navigate({ name: "channel", id: MANAGER_ID })}>
+          <Icon name="sparkle" size={16} /> Set it up with the manager
+        </button>
+      </section>
+    );
+  }
+  const status = agentStatus(agent, running.has(agent.id), now);
+  return (
+    <section className="briefing" aria-label="Start of day">
+      <div className="briefing__head">
+        <div>
+          <h2>{agent.name}</h2>
+          <p className="muted" data-testid="briefing-meta">
+            {status.kind === "running"
+              ? "Running now…"
+              : briefing
+                ? `Updated ${new Date(briefing.at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`
+                : "Hasn't run yet"}
+            {" · "}
+            {scheduleLabel(agent.schedule)}
+            {status.next !== undefined ? ` · next ${wakeLabel(status.next, now)}` : ""}
+          </p>
+        </div>
+        <div className="button-row">
+          {demo ? (
+            <button type="button" className="button button--sm" onClick={simulateNine} title="Demo control: fire the weekday 09:00 schedule now">
+              <Icon name="play" size={14} /> Simulate 9:00 <span className="demo-tag">demo</span>
+            </button>
+          ) : null}
+          <button type="button" className="button button--sm" disabled={status.kind === "running" || status.kind === "paused"} onClick={() => void wake(agent)}>
+            Wake now
+          </button>
+          <button type="button" className="button button--sm" onClick={() => navigate({ name: "channel", id: agent.id })}>
+            Open channel
+          </button>
+        </div>
+      </div>
+      {briefing ? <PriorityCard card={briefing.card} /> : <p className="muted">It posts Do now, Today and Waiting on you here after its next run.</p>}
+    </section>
+  );
+}
+
 export function Home() {
-  const { state, dispatch, toast } = useApp();
+  const { state, dispatch, toast, platform } = useApp();
   const { widgets, agentName } = state.settings;
+  // A modal, toast or notification over Home: the widget host's tiles hide (follow-up 7).
+  const overlays = useOverlayCount();
+  const covered = overlays > 0 || state.toasts.length > 0 || state.notices.length > 0;
+  useEffect(() => {
+    platform.setWidgetsCovered(covered);
+  }, [platform, covered]);
   const [picker, setPicker] = useState(false);
   const [asking, setAsking] = useState(false);
   const [settingsFor, setSettingsFor] = useState<string | null>(null);
@@ -66,7 +133,7 @@ export function Home() {
       <div className="screen-header">
         <div>
           <h1>Home</h1>
-          <p className="muted">Your widgets. {agentName} keeps them up to date in the background.</p>
+          <p className="muted">Your dashboard. Your agents keep it up to date while they sleep between runs.</p>
         </div>
         <div className="button-row">
           <button type="button" className="button" onClick={() => setAsking(true)}>
@@ -78,7 +145,10 @@ export function Home() {
         </div>
       </div>
 
-      <div className="widget-grid">
+      <StartOfDay />
+
+      <h2 className="section-title">Widgets</h2>
+      <div className="widget-grid" data-covered={covered ? "true" : undefined}>
         {widgets.map((widget, index) => {
           const title = titleOf(widget, agentName);
           const settingsOpen = settingsFor === widget.id;

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { Feed, GmailDashboard } from "../engine/fake/data.ts";
 import { useEngineData, useNow } from "../engine/hooks.ts";
 import { useApp } from "../state/context.ts";
@@ -21,8 +21,8 @@ function draftId(): string {
 /** A Draft for the owner to approve; widget and data-job drafts always need the owner. */
 function useCreateDraft() {
   const { dispatch, toast, now, state } = useApp();
-  return (draft: Omit<Draft, "id" | "createdAt">) => {
-    dispatch({ type: "draft-create", draft: { ...draft, id: draftId(), createdAt: now() } });
+  return (draft: Omit<Draft, "id" | "createdAt" | "status">) => {
+    dispatch({ type: "draft-create", draft: { ...draft, status: "pending", id: draftId(), createdAt: now() } });
     toast(`Draft saved for your approval. ${state.settings.agentName} won't send it until you approve.`, "success");
   };
 }
@@ -30,9 +30,9 @@ function useCreateDraft() {
 const SLACK_INTERVALS = [5, 10, 15, 30, 60] as const;
 
 export function SlackDigestWidget({ settingsOpen }: { settingsOpen: boolean }) {
-  const { state, updateSettings } = useApp();
+  const { state, updateSettings, dispatch, demo } = useApp();
   const interval = state.settings.slackIntervalMin;
-  const { data, status, fetchedAt } = useEngineData<Feed>(
+  const { data, status, fetchedAt, refresh } = useEngineData<Feed>(
     "widget_refresh",
     `Slack: what needs ${state.settings.ownerName}, across DMs, mentions, threads and channels`,
     { kind: "connectors", connectors: ["claude.ai Slack"] },
@@ -40,17 +40,49 @@ export function SlackDigestWidget({ settingsOpen }: { settingsOpen: boolean }) {
   );
   const now = useNow(30_000);
   const createDraft = useCreateDraft();
+  const reviewed = data?.reviewed;
+  // This widget is the Slack agent's silent run: each fetch is its latest outcome.
+  useEffect(() => {
+    if (fetchedAt === null || reviewed === undefined) return;
+    const outcome = reviewed > 0 ? `Claude reviewed ${reviewed} new` : "Fetched, nothing new, no Claude usage";
+    dispatch({ type: "agent-update", id: "slack-agent", patch: { lastRun: { at: fetchedAt, outcome, modelTurn: reviewed > 0 } } });
+  }, [fetchedAt, reviewed, dispatch]);
   return (
     <div className="feed">
       <p className="widget__meta" data-testid="slack-meta">
         {status === "refreshing" && !data ? "Checking…" : ago(now, fetchedAt)}
-        {data?.reviewed !== undefined
-          ? data.reviewed > 0
-            ? ` · Claude reviewed ${data.reviewed} new`
-            : " · nothing new, no Claude usage"
-          : ""}{" "}
-        · every {interval} min
+        {reviewed !== undefined ? " · " : null}
+        {reviewed !== undefined ? (
+          reviewed > 0 ? (
+            <span className="turn-chip turn-chip--model" data-testid="slack-turn">
+              model turn: Claude reviewed {reviewed} new
+            </span>
+          ) : (
+            <span className="turn-chip" data-testid="slack-turn">
+              nothing new, no Claude usage
+            </span>
+          )
+        ) : null}
+        {` · every ${interval} min`}
       </p>
+      <div className="button-row">
+        <button type="button" className="button button--sm" onClick={refresh} disabled={status === "refreshing"}>
+          <Icon name="reset" size={14} /> Refresh now
+        </button>
+        {demo ? (
+          <button
+            type="button"
+            className="button button--sm"
+            title="Demo control: the next fetch finds 3 new messages"
+            onClick={() => {
+              demo.simulateNewSlack(3);
+              refresh();
+            }}
+          >
+            New messages arrive <span className="demo-tag">demo</span>
+          </button>
+        ) : null}
+      </div>
       {settingsOpen ? (
         <label className="field field--inline">
           <span>Check every</span>

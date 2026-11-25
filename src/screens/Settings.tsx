@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { SignOff } from "../brand/SignOff.tsx";
+import { SANDBOX_HOME, engineHome, homeProblem } from "../engine/adapter/home.ts";
 import { useApp } from "../state/context.ts";
 import { CONNECTOR_NAMES, type Density, type SendMode, type ThemeMode } from "../state/model.ts";
 import { ACCENT_PRESETS, FAMILIES, fitAccent, resolveTheme, type ThemeFamily } from "../theme/themes.ts";
@@ -190,8 +191,9 @@ export function Settings({ osDark }: { osDark: boolean }) {
             }}
           />
           <span className="switch__track" aria-hidden="true" />
-          Developer mode: show Fleet, Board and Panes for your rlx projects
+          Developer mode: show raw runs and logs, and Fleet, Board and Panes for your rlx projects
         </label>
+        <EngineHomeField />
       </section>
 
       <section className="settings__section" id="about" aria-labelledby="about-title">
@@ -252,5 +254,38 @@ export function Settings({ osDark }: { osDark: boolean }) {
         </Modal>
       ) : null}
     </div>
+  );
+}
+
+function EngineHomeField() {
+  const { state, updateSettings } = useApp();
+  const [value, setValue] = useState(state.settings.engineHome);
+  const problem = homeProblem(value);
+  return (
+    <form
+      className="field"
+      onSubmit={(e) => {
+        e.preventDefault();
+        if (!problem) updateSettings({ engineHome: value.trim() });
+      }}
+    >
+      <label htmlFor="engine-home">Engine home (rlx's AISQUARE_HOME)</label>
+      <div className="composer">
+        <input
+          id="engine-home"
+          value={value}
+          placeholder={SANDBOX_HOME}
+          aria-invalid={problem ? true : undefined}
+          aria-describedby="engine-home-help"
+          onChange={(e) => setValue(e.target.value)}
+        />
+        <button type="submit" className="button" disabled={Boolean(problem) || value.trim() === state.settings.engineHome}>
+          Save
+        </button>
+      </div>
+      <span id="engine-home-help" className={problem ? "error-text" : "muted"} data-testid="engine-home-help">
+        {problem ?? `Using ${engineHome(state.settings.engineHome)}. The app never reads or writes your real rlx home.`}
+      </span>
+    </form>
   );
 }

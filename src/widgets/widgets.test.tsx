@@ -61,7 +61,7 @@ describe("Slack digest", () => {
     wrap(<SlackDigestWidget settingsOpen={false} />);
     const meta = await screen.findByTestId("slack-meta");
     await screen.findByText(/Priya Shah/);
-    expect(meta.textContent).toMatch(/^checked just now · Claude reviewed 5 new · every 15 min$/);
+    expect(meta.textContent).toBe("checked just now · model turn: Claude reviewed 3 new · every 15 min");
     const items = document.querySelectorAll(".feed__item--needs-you");
     expect(items.length).toBe(3);
     for (const item of items) {
@@ -84,6 +84,22 @@ describe("Gmail dashboard", () => {
     }
   });
 
+  it("refreshes silently with no model turn, and takes one only when something is new", async () => {
+    const engine = new FakeEngine({ stepMs: 20, seed: false });
+    wrap(<SlackDigestWidget settingsOpen={false} />, engine);
+    const turn = () => screen.getByTestId("slack-turn").textContent;
+    await screen.findByText(/Priya Shah/);
+    expect(turn()).toBe("model turn: Claude reviewed 3 new");
+    fireEvent.click(screen.getByRole("button", { name: /Refresh now/ }));
+    await vi.waitFor(() => expect(turn()).toBe("nothing new, no Claude usage"));
+    fireEvent.click(screen.getByRole("button", { name: /Refresh now/ }));
+    await vi.waitFor(() => expect((screen.getByRole("button", { name: /Refresh now/ }) as HTMLButtonElement).disabled).toBe(false));
+    expect(turn()).toBe("nothing new, no Claude usage");
+    engine.simulateNewSlack(3);
+    fireEvent.click(screen.getByRole("button", { name: /Refresh now/ }));
+    await vi.waitFor(() => expect(turn()).toBe("model turn: Claude reviewed 3 new"));
+  });
+
   it("creates a draft from Draft reply that shows up in Approvals with the sign-off", async () => {
     render(<App platform={browserPlatform} engine={new FakeEngine({ stepMs: 20, seed: false })} initialSettings={settings} />);
     const gmail = await screen.findByRole("region", { name: "Gmail" });
@@ -91,6 +107,7 @@ describe("Gmail dashboard", () => {
     fireEvent.click(within(needsReply).getAllByRole("button", { name: "Draft reply" })[0]!);
     fireEvent.click(screen.getByRole("button", { name: "Approvals" }));
     const drafts = await screen.findByTestId("drafts");
+    expect(within(drafts).getByText("To Tom Okafor")).toBeTruthy();
     const draft = within(drafts).getByText("To Tom Okafor").closest("li") as HTMLElement;
     expect(within(draft).getByTestId("sign-off").textContent).toBe("— Nova, Sam Rivera's AI Agent");
   });

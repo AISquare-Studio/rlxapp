@@ -309,3 +309,115 @@ export const PANE_LINES: Record<string, string[]> = {
   ],
   default: ["(no output yet)"],
 };
+
+/** A source link as the briefing cites it. */
+export interface BriefSource {
+  label: string;
+  connector: string;
+  url: string;
+}
+
+export interface BriefItem {
+  id: string;
+  text: string;
+  why?: string;
+  sources: BriefSource[];
+}
+
+/**
+ * The Start of day agent's output: the Meetings, Gmail and Slack agents' latest outcomes,
+ * de-duplicated (Priya's pricing sign-off came in on Slack and Gmail; it is one item) and
+ * re-prioritized.
+ */
+export interface Briefing {
+  summary: string;
+  doNow: BriefItem[];
+  today: BriefItem[];
+  waiting: BriefItem[];
+  checklist: string[];
+  promise: { text: string; due: string; meeting: string; sources: BriefSource[] };
+  draft: { to: string; subject: string; body: string; connector: string; context: string };
+  /** `draftTemplate` gets the owner's answer in place of `{answer}`. */
+  needsContext: { question: string; to: string; subject: string; connector: string; sources: BriefSource[]; draftTemplate: string };
+  /** The feeds it read, for the de-duplication count. */
+  read: { meetings: number; gmail: number; slack: number; merged: number };
+}
+
+const SLACK_DM: BriefSource = { label: "Slack DM from Priya Shah", connector: "Slack", url: "https://example.com/slack/s1" };
+const PRICING_MAIL: BriefSource = { label: "Email: “Pricing page copy”", connector: "Gmail", url: "https://example.com/gmail/g0" };
+const TOM_MAIL: BriefSource = { label: "Email: “Contract redlines, round 2”", connector: "Gmail", url: "https://example.com/gmail/g1" };
+const SYNC_NOTES: BriefSource = {
+  label: "Weekly product sync transcript",
+  connector: "Meet transcripts (Google Drive)",
+  url: "https://example.com/drive/sync-notes",
+};
+const CAL: (label: string, id: string) => BriefSource = (label, id) => ({ label, connector: "Google Calendar", url: `https://example.com/calendar/${id}` });
+
+export const BRIEFING: Briefing = {
+  summary: "3 to do now, 4 today, 2 waiting on you. I merged 2 duplicates across Slack and Gmail.",
+  doNow: [
+    {
+      id: "b1",
+      text: "Sign off on the pricing page copy for Priya before 15:00",
+      why: "Asked twice, on Slack and by email, with a deadline today",
+      sources: [SLACK_DM, PRICING_MAIL],
+    },
+    { id: "b2", text: "Answer Tom about clause 7 of the contract", why: "Blocks his redlines", sources: [TOM_MAIL] },
+    {
+      id: "b3",
+      text: "Send Lena the Q4 deck outline",
+      why: "You promised it in yesterday's product sync, due Friday",
+      sources: [SYNC_NOTES, CAL("Weekly product sync", "sync")],
+    },
+  ],
+  today: [
+    { id: "b4", text: "Northwind intro call at 14:30 with Ravi Menon", sources: [CAL("Northwind intro call", "northwind")] },
+    {
+      id: "b5",
+      text: "Say whether you own the press kit",
+      why: "Marco asked in #launch",
+      sources: [{ label: "#launch message from Marco Diaz", connector: "Slack", url: "https://example.com/slack/s2" }],
+    },
+    {
+      id: "b6",
+      text: "Review Lena's roadmap draft v3",
+      sources: [{ label: "Email: “Roadmap draft v3”", connector: "Gmail", url: "https://example.com/gmail/g4" }],
+    },
+    { id: "b7", text: "1:1 with Priya at 16:00", sources: [CAL("1:1 with Priya", "1on1")] },
+  ],
+  waiting: [
+    {
+      id: "b8",
+      text: "Aiko's intro to Ravi needs your availability",
+      sources: [{ label: "Email: “Intro: Ravi from Northwind”", connector: "Gmail", url: "https://example.com/gmail/g2" }],
+    },
+    {
+      id: "b9",
+      text: "Lena's scope question in your #product thread",
+      sources: [{ label: "#product thread", connector: "Slack", url: "https://example.com/slack/s3" }],
+    },
+  ],
+  checklist: ["Pricing copy sign-off (15:00)", "Reply to Tom on clause 7", "Block 30 min for the Q4 deck outline"],
+  promise: {
+    text: "You said you'd send Lena the Q4 deck outline",
+    due: "Friday",
+    meeting: "Weekly product sync, yesterday 11:00",
+    sources: [SYNC_NOTES],
+  },
+  draft: {
+    to: "Finance Team",
+    subject: "Re: Q3 budget review moved to Thursday",
+    body: "Thanks for the heads-up. I'll bring the updated forecast on Thursday.",
+    connector: "claude.ai Gmail",
+    context: "From your Start of day briefing",
+  },
+  needsContext: {
+    question: "Aiko introduced you to Ravi from Northwind. When are you free to meet him this week?",
+    to: "Aiko Tanaka",
+    subject: "Re: Intro: Ravi from Northwind",
+    connector: "claude.ai Gmail",
+    sources: [{ label: "Email: “Intro: Ravi from Northwind”", connector: "Gmail", url: "https://example.com/gmail/g2" }],
+    draftTemplate: "Thanks Aiko! Ravi, great to meet you. I'm free {answer}. Would one of those work for you?",
+  },
+  read: { meetings: 2, gmail: 4, slack: 5, merged: 2 },
+};

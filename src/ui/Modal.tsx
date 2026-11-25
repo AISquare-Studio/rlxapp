@@ -1,5 +1,6 @@
 import { useEffect, useRef, type ReactNode } from "react";
 import { Icon } from "./Icon.tsx";
+import { openOverlay } from "./overlays.ts";
 
 export interface ModalProps {
   title: string;
@@ -12,6 +13,8 @@ export interface ModalProps {
 /** A dialog that traps focus, closes on Escape and restores focus to what opened it. */
 export function Modal({ title, onClose, children, footer, tone = "default" }: ModalProps) {
   const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => openOverlay(), []);
 
   useEffect(() => {
     const opener = document.activeElement as HTMLElement | null;
