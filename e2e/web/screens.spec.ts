@@ -49,7 +49,7 @@ test("every screen is reachable by clicking from Home, with no console errors", 
   await expect(page.getByTestId("messages")).toContainText("Priya");
 
   await spaces.getByRole("button", { name: "Settings" }).click();
-  await page.getByRole("switch").check();
+  await page.getByRole("switch", { name: /Developer mode/ }).check();
   await spaces.getByRole("button", { name: "Developer" }).click();
   await expect(page.getByRole("heading", { level: 1, name: "Runs" })).toBeVisible();
   for (const state of ["Queued", "Running", "Needs you", "Done", "Failed"]) {

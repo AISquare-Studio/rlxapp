@@ -107,6 +107,17 @@ export interface EngineInfo {
 
 export type Unsubscribe = () => void;
 
+/**
+ * Settings that live with the host's rlx, not in the app (rlxd's settings API, handoff
+ * addendum §4): every client of that host sees the same values and their changes.
+ */
+export interface HostSettings {
+  /** The rlx service's own login registration (LaunchAgent / systemd user unit / logon task). */
+  startAtLogin: boolean;
+  /** The service's one menu-bar / tray icon: rlx's '\' in colour, or a monochrome template. */
+  serviceTrayIcon: "color" | "template";
+}
+
 export interface Engine {
   /** The protocol-version handshake. */
   hello(): Promise<EngineInfo>;
@@ -124,6 +135,12 @@ export interface Engine {
   cancel(run: RunId): Promise<void>;
   /** Fires when any run's summary changes, so lists can re-read `runs()`. */
   onRunsChanged(listener: () => void): Unsubscribe;
+  /** This host's settings. */
+  hostSettings(): Promise<HostSettings>;
+  /** Changes some of this host's settings and resolves with all of them. */
+  updateHostSettings(patch: Partial<HostSettings>): Promise<HostSettings>;
+  /** Fires when this host's settings change, from any client. */
+  onHostSettingsChanged(listener: (settings: HostSettings) => void): Unsubscribe;
 }
 
 /** Developer mode's reads (architecture §9): rlx's fleet, board and panes, through the engine. */

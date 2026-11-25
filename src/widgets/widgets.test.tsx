@@ -198,7 +198,7 @@ describe("agent-made widget tile in the app (widget host)", () => {
     const platform = nativeLike({ off: "off on macOS until the isolation probe passes there" }, []);
     render(<App platform={platform} engine={new FakeEngine({ stepMs: 20, seed: false })} initialSettings={settings} />);
     const tile = await screen.findByRole("region", { name: "Open pull requests" });
-    expect(within(tile).getByText("Agent-made widgets are off here for now.")).toBeTruthy();
+    expect(await within(tile).findByText("Agent-made widgets are off here for now.")).toBeTruthy();
     expect(within(tile).getByTestId("agent-widget-off-reason").textContent).toBe(
       "Agent-made widgets are off on macOS until the isolation probe passes there.",
     );

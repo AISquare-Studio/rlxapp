@@ -30,7 +30,7 @@ rlx is a [Tauri 2](https://v2.tauri.app) app. The Rust core lives in `src-tauri/
 | `npm run lint` / `npm run typecheck` / `npm test` | Lint (oxlint), typecheck (tsc) and test (Vitest) the UI |
 | `cargo test` / `cargo clippy --all-targets -- -D warnings` | Test and lint the core (run in `src-tauri/`) |
 | `npm run smoke -- <binary>` | Launch a built binary and check that it paints and stays up for 5 s |
-| `npm run icons` | Regenerate the app icons, tray icons and favicon from `src/assets/rlx-logo.svg` |
+| `npm run icons` | Regenerate the app icons and favicon from `src/assets/rlx-logo.svg` |
 | `npm run e2e:web` | Browser checks of the UI shell in the browser preview, in Chromium (Playwright, `e2e/web`; run `npx playwright install chromium` once) |
 | `npm run gallery` | Capture every screen in the rlx and rlx light themes into `docs/gallery/` |
 | `scripts/measure-budgets.sh` | macOS: installer size, cold start and idle memory (phys_footprint) against the budgets |
@@ -47,8 +47,9 @@ The UI talks to the core only through `src/platform/`. When the UI runs in a pla
 
 The UI runs on mock data through `FakeEngine` (`src/engine/fake/`), which implements the `Engine` interface from the architecture doc. The UI reaches agentic work only through that interface; `src/engine/adapter/native.ts` is the only module that calls into the Rust core.
 
-- Closing the window keeps rlx running in the menu bar (system tray on Windows and Linux); its menu has **Open rlx** and **Quit rlx**.
-- Agent-made widgets render in `<iframe sandbox="allow-scripts">` in the browser preview. In the app, the main window allows no frames; they move to the separate widgets webview and stay off until the isolation probe passes (architecture §5.3), so built-ins render as React in the main window.
+- The app draws no tray icon: the one menu-bar / tray icon belongs to the rlx service (rlxd), whose menu has **Open rlx app**. Closing the window hides it (and the Dock icon on macOS) and keeps the app running for scheduled jobs; opening the app again, from the service tray, the Dock or a second launch, brings the same window back (single instance).
+- **Start rlx at login** (Settings › rlx service) is the service's login registration, set through the Engine; the app registers no login item of its own.
+- Agent-made widgets render in `<iframe sandbox="allow-scripts">` in the browser preview. In the app, the main window allows no frames; they render only in the widget host's `widgets` webview, and the host's policy keeps them off until the isolation probe passes (architecture §5.3). Built-ins render as React in the main window.
 - Themes are CSS variables (`src/theme/tokens.css`), checked against `src/theme/themes.ts` and for WCAG contrast by tests.
 
 ### Budgets

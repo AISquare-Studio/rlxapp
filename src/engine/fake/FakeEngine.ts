@@ -16,6 +16,7 @@ import type {
   RunRequest,
   RunState,
   RunSummary,
+  HostSettings,
   Seq,
   SignInStep,
   Unsubscribe,
@@ -64,6 +65,9 @@ export interface FakeEngineOptions {
 
 const MAX_RUNNING_TASKS = 2;
 
+/** rlx's defaults: the service starts at login, and its tray icon is the colour '\'. */
+export const DEFAULT_HOST_SETTINGS: HostSettings = { startAtLogin: true, serviceTrayIcon: "color" };
+
 export class FakeEngine implements Engine, DeveloperEngine {
   private readonly records = new Map<RunId, RunRecord>();
   private readonly changeListeners = new Set<() => void>();
@@ -73,6 +77,10 @@ export class FakeEngine implements Engine, DeveloperEngine {
   private counter = 0;
   /** New Slack messages the next fetch finds; the first fetch finds 3. */
   private slackNew = 3;
+  /** Host settings, per host; this mock serves one host. */
+  private readonly hosts = new Map<string, HostSettings>([["local", { ...DEFAULT_HOST_SETTINGS }]]);
+  private readonly host = "local";
+  private readonly hostListeners = new Set<(settings: HostSettings) => void>();
 
   constructor(options: FakeEngineOptions = {}) {
     this.stepMs = options.stepMs ?? 1400;
@@ -217,6 +225,22 @@ export class FakeEngine implements Engine, DeveloperEngine {
   onRunsChanged(listener: () => void): Unsubscribe {
     this.changeListeners.add(listener);
     return () => this.changeListeners.delete(listener);
+  }
+
+  hostSettings(): Promise<HostSettings> {
+    return Promise.resolve({ ...(this.hosts.get(this.host) ?? DEFAULT_HOST_SETTINGS) });
+  }
+
+  updateHostSettings(patch: Partial<HostSettings>): Promise<HostSettings> {
+    const next = { ...(this.hosts.get(this.host) ?? DEFAULT_HOST_SETTINGS), ...patch };
+    this.hosts.set(this.host, next);
+    for (const listener of this.hostListeners) listener({ ...next });
+    return Promise.resolve({ ...next });
+  }
+
+  onHostSettingsChanged(listener: (settings: HostSettings) => void): Unsubscribe {
+    this.hostListeners.add(listener);
+    return () => this.hostListeners.delete(listener);
   }
 
   // ---- DeveloperEngine -----------------------------------------------------------------

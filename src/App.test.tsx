@@ -80,7 +80,7 @@ describe("App", () => {
     fireEvent.click(within(spaces).getByRole("button", { name: "Settings" }));
     expect(await screen.findByRole("heading", { level: 1, name: "Settings" })).toBeTruthy();
     expect(within(spaces).queryByRole("button", { name: "Developer" })).toBeNull();
-    fireEvent.click(screen.getByRole("switch"));
+    fireEvent.click(screen.getByRole("switch", { name: /Developer mode/ }));
     fireEvent.click(within(spaces).getByRole("button", { name: "Developer" }));
     expect(await screen.findByRole("heading", { level: 1, name: "Runs" })).toBeTruthy();
     for (const label of ["Fleet", "Board", "Panes"]) {
@@ -89,7 +89,7 @@ describe("App", () => {
     }
     expect(screen.getByRole("button", { name: /Open in terminal/ })).toBeTruthy();
     fireEvent.click(within(spaces).getByRole("button", { name: "Settings" }));
-    fireEvent.click(screen.getByRole("switch"));
+    fireEvent.click(screen.getByRole("switch", { name: /Developer mode/ }));
     expect(within(spaces).queryByRole("button", { name: "Developer" })).toBeNull();
   });
 
@@ -164,5 +164,25 @@ describe("budget measurement", () => {
     render(<App platform={platform} engine={new FakeEngine({ stepMs: 50 })} />);
     expect(await screen.findByRole("heading", { level: 1, name: "Home" })).toBeTruthy();
     expect(localStorage.getItem("rlx.settings.v1")).toBeNull();
+  });
+});
+
+describe("rlx service settings", () => {
+  it("toggles Start rlx at login and the menu-bar icon through the engine, on by default", async () => {
+    const engine = new FakeEngine({ stepMs: 50 });
+    render(<App platform={browserPlatform} engine={engine} initialSettings={onboarded} />);
+    fireEvent.click(within(await screen.findByRole("navigation", { name: "Spaces" })).getByRole("button", { name: "Settings" }));
+    const login = (await screen.findByRole("switch", { name: "Start rlx at login" })) as HTMLInputElement;
+    await vi.waitFor(() => expect(login.checked).toBe(true));
+    fireEvent.click(login);
+    await vi.waitFor(() => expect(login.checked).toBe(false));
+    await expect(engine.hostSettings()).resolves.toMatchObject({ startAtLogin: false });
+    fireEvent.click(screen.getByLabelText("Template"));
+    await vi.waitFor(async () => expect(await engine.hostSettings()).toMatchObject({ serviceTrayIcon: "template" }));
+    // Another client of the same host changes it: the switch follows.
+    await engine.updateHostSettings({ startAtLogin: true });
+    await vi.waitFor(() => expect(login.checked).toBe(true));
+    // Nothing about the service is stored in the app's own settings.
+    expect(localStorage.getItem("rlx.settings.v1") ?? "").not.toMatch(/startAtLogin|serviceTrayIcon/);
   });
 });

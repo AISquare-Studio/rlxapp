@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useApp } from "../state/context.ts";
-import type { Mount, RunEvent, RunKind, RunSummary, Seq } from "./types.ts";
+import type { HostSettings, Mount, RunEvent, RunKind, RunSummary, Seq } from "./types.ts";
 
 let runCounter = 0;
 
@@ -131,4 +131,32 @@ export function useEngineData<T>(kind: RunKind, prompt: string, mount: Mount, ev
     start();
   }, [start]);
   return { data, status, fetchedAt, refresh };
+}
+
+/**
+ * This host's settings from the engine (rlxd's settings API), kept live: a change from any
+ * client shows here. `update` writes through the engine; nothing is stored in the app.
+ */
+export function useHostSettings(): { settings: HostSettings | null; update: (patch: Partial<HostSettings>) => Promise<void> } {
+  const { engine } = useApp();
+  const [settings, setSettings] = useState<HostSettings | null>(null);
+  useEffect(() => {
+    let active = true;
+    engine
+      .hostSettings()
+      .then((next) => active && setSettings(next))
+      .catch((error: unknown) => console.error("hostSettings() failed", error));
+    const off = engine.onHostSettingsChanged((next) => active && setSettings(next));
+    return () => {
+      active = false;
+      off();
+    };
+  }, [engine]);
+  const update = useCallback(
+    async (patch: Partial<HostSettings>) => {
+      setSettings(await engine.updateHostSettings(patch));
+    },
+    [engine],
+  );
+  return { settings, update };
 }

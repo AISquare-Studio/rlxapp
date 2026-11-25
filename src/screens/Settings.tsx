@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { SignOff } from "../brand/SignOff.tsx";
 import { SANDBOX_HOME, engineHome, homeProblem } from "../engine/adapter/home.ts";
+import { useHostSettings } from "../engine/hooks.ts";
 import { useApp } from "../state/context.ts";
 import { CONNECTOR_NAMES, type Density, type SendMode, type ThemeMode } from "../state/model.ts";
 import { ACCENT_PRESETS, FAMILIES, fitAccent, resolveTheme, type ThemeFamily } from "../theme/themes.ts";
@@ -179,6 +180,8 @@ export function Settings({ osDark }: { osDark: boolean }) {
         </p>
       </section>
 
+      <ServiceSection />
+
       <section className="settings__section" id="developer" aria-labelledby="developer-title">
         <h2 id="developer-title">Developer</h2>
         <label className="switch">
@@ -287,5 +290,52 @@ function EngineHomeField() {
         {problem ?? `Using ${engineHome(state.settings.engineHome)}. The app never reads or writes your real rlx home.`}
       </span>
     </form>
+  );
+}
+
+/**
+ * The rlx service's settings, read and written through the engine (rlxd's settings API). The
+ * service owns the login item and the one tray icon; the app registers neither.
+ */
+function ServiceSection() {
+  const { settings, update } = useHostSettings();
+  return (
+    <section className="settings__section" id="service" aria-labelledby="service-title">
+      <h2 id="service-title">rlx service</h2>
+      <p className="muted">Runs your agents in the background and keeps rlx's icon in the menu bar.</p>
+      <label className="switch">
+        <input
+          type="checkbox"
+          role="switch"
+          checked={settings?.startAtLogin ?? false}
+          disabled={!settings}
+          onChange={(e) => void update({ startAtLogin: e.target.checked })}
+        />
+        <span className="switch__track" aria-hidden="true" />
+        Start rlx at login
+      </label>
+      <fieldset className="field-group">
+        <legend>Menu-bar icon</legend>
+        <div className="segmented">
+          {(
+            [
+              ["color", "Colour \\"],
+              ["template", "Template"],
+            ] as const
+          ).map(([value, label]) => (
+            <label key={value} className={`segmented__option${settings?.serviceTrayIcon === value ? " is-active" : ""}`}>
+              <input
+                type="radio"
+                name="service-tray-icon"
+                checked={settings?.serviceTrayIcon === value}
+                disabled={!settings}
+                onChange={() => void update({ serviceTrayIcon: value })}
+              />
+              {label}
+            </label>
+          ))}
+        </div>
+      </fieldset>
+    </section>
   );
 }

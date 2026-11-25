@@ -316,6 +316,7 @@ function Sidebar() {
               ["send-safety", "Send safety"],
               ["appearance", "Appearance"],
               ["agent", "Your agent"],
+              ["service", "rlx service"],
               ["developer", "Developer"],
               ["about", "About"],
             ].map(([id, label]) => (
