@@ -38,8 +38,31 @@ export interface CalmViolation {
   text: string;
 }
 
-/** Files that define the tokens, where raw values belong. */
+/** Files that define the tokens, where raw values belong (repo-relative, with '/'). */
 export const TOKEN_FILES = ["src/theme/tokens.css"];
+
+/** A path with '/' separators, whatever the OS gave (Windows gives 'src\theme\tokens.css'). */
+export function toPosixPath(path: string): string {
+  return path.replace(/\\/g, "/");
+}
+
+/** Whether `path` (absolute or repo-relative, any separator) is a token file. */
+export function isTokenFile(path: string): boolean {
+  const posix = toPosixPath(path);
+  return TOKEN_FILES.some((f) => posix === f || posix.endsWith(`/${f}`));
+}
+
+/**
+ * What the lint checks among repo-relative paths (any separator): stylesheets and components
+ * under src/, minus test fixtures and tests. Returned with '/' separators, sorted.
+ */
+export function lintTargets(paths: string[]): { css: string[]; tsx: string[] } {
+  const all = paths.map(toPosixPath).filter((p) => !p.includes("/fixtures/"));
+  return {
+    css: all.filter((p) => p.endsWith(".css")).sort(),
+    tsx: all.filter((p) => p.endsWith(".tsx") && !p.endsWith(".test.tsx")).sort(),
+  };
+}
 
 /** Every CSS named colour (CSS Color 4), plus the system-colour keywords that read as colours. */
 const NAMED_COLORS = new Set(
@@ -143,7 +166,7 @@ function px(value: string | undefined): number | null {
 
 /** Lints one stylesheet. `path` decides whether raw values are allowed (the token file). */
 export function lintCalm(css: string, path: string): CalmViolation[] {
-  const tokenFile = TOKEN_FILES.some((f) => path.endsWith(f));
+  const tokenFile = isTokenFile(path);
   const violations: CalmViolation[] = [];
   const root = parse(css, { from: path });
   const flag = (node: Declaration | Rule, rule: CalmRule) =>

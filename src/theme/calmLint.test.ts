@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import appCss from "../App.css?raw";
-import { lintCalm, lintInlineStyles } from "./calmLint.ts";
+import { isTokenFile, lintCalm, lintInlineStyles, lintTargets } from "./calmLint.ts";
 import bad from "./fixtures/calm-bad.css?raw";
 import good from "./fixtures/calm-good.css?raw";
 import tokensCss from "./tokens.css?raw";
@@ -72,5 +72,32 @@ describe("densities (F7)", () => {
     const steps = [...tokensCss.matchAll(/--rlx-space-\d+:\s*(\d+)px/g)].map((m) => Number(m[1]));
     expect(steps.length).toBeGreaterThanOrEqual(21);
     expect(steps.filter((n) => !grid.has(n))).toEqual([]);
+  });
+});
+
+describe("calm lint paths (Windows)", () => {
+  it("treats the token file as the token file with either separator", () => {
+    expect(isTokenFile("src\\theme\\tokens.css")).toBe(true);
+    expect(isTokenFile("D:\\a\\rlxapp\\rlxapp\\src\\theme\\tokens.css")).toBe(true);
+    expect(isTokenFile("src/theme/tokens.css")).toBe(true);
+    expect(isTokenFile("src\\App.css")).toBe(false);
+    expect(isTokenFile("src\\theme\\not-tokens.css")).toBe(false);
+    expect(lintCalm(tokensCss, "src\\theme\\tokens.css")).toEqual([]);
+    expect(lintCalm(".x { color: #123456 }", "src\\App.css").map((v) => v.rule)).toEqual(["raw-color"]);
+  });
+
+  it("picks the same stylesheets and components from Windows paths, without the fixtures", () => {
+    const windows = [
+      "src\\App.css",
+      "src\\theme\\tokens.css",
+      "src\\theme\\fixtures\\calm-bad.css",
+      "src\\theme\\fixtures\\calm-good.css",
+      "src\\screens\\Home.tsx",
+      "src\\App.test.tsx",
+      "src\\theme\\calmLint.ts",
+    ];
+    const expected = { css: ["src/App.css", "src/theme/tokens.css"], tsx: ["src/screens/Home.tsx"] };
+    expect(lintTargets(windows)).toEqual(expected);
+    expect(lintTargets(windows.map((p) => p.replace(/\\/g, "/")))).toEqual(expected);
   });
 });
