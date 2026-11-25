@@ -9,11 +9,16 @@ on:
     branches: [main, "rc/**"]
   workflow_dispatch:
 
-# Cancel superseded PR runs only. As in rlx, runs are grouped by event too, so a push
-# and a run by hand on the same ref don't cancel each other. Push runs on main and
-# rc/** are the merge gates, so a newer push queues behind them and never cancels them.
+# Concurrency: only superseded PR runs are cancelled.
+#   - A pull_request run is grouped by its ref, so a newer push to the PR cancels the
+#     older run, whether it is running or still pending.
+#   - Every other run (a push to main or rc/**, the merge gates, and a run by hand)
+#     gets a group of its own, keyed by its run id. It never waits behind another run,
+#     so nothing can cancel it: not while it runs, and not while it is pending. (In a
+#     shared group, a third run would cancel the pending second one even with
+#     cancel-in-progress off.)
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
+  group: ci-${{ github.workflow }}-${{ github.event_name }}-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
@@ -28,18 +33,20 @@ env:
 #             - Rust fmt, clippy and tests;
 #             - an unsigned `tauri build` of that OS's installers;
 #             - a smoke test of the built binary (under xvfb on Linux): it must paint
-#               its first frame and stay up for 5 s;
+#               its first frame and stay up for 5 s after it;
 #             - idle memory: on Windows and Linux, scripts/idle-memory.mjs (private
 #               working set and PSS); on macOS, scripts/measure-budgets.sh
 #               (phys_footprint, plus installer size and cold start);
-#             - the installer size gate: fails if a .dmg, .msi, setup .exe, .deb
-#               or .rpm is over 25,000,000 bytes (the AppImage is report-only).
-#           The jobs then upload the installers as run artifacts.
+#             - an upload of the installers as run artifacts;
+#             - last, the installer size gate: it fails the job if a .dmg, .msi,
+#               setup .exe, .deb or .rpm is over 25,000,000 bytes (the AppImage is
+#               report-only). It runs after the upload and the budget measurement,
+#               so an oversized installer is still uploaded and can be inspected.
 #   ci-ok   passes only when every app job did: the one check for branch protection
 #           to require, however many legs there are.
 #
-# main holds no app code until the release train lands (only the README, LICENSE and
-# this workflow). Every app step is therefore guarded by
+# main holds no app code until the release train lands (only repo infra: the README,
+# LICENSE, governance files and this workflow). Every app step is therefore guarded by
 # hashFiles('src-tauri/Cargo.toml') != '', and on main the jobs pass as no-ops.
 
 jobs:
@@ -153,18 +160,6 @@ jobs:
         if: runner.os == 'Windows' && hashFiles('src-tauri/Cargo.toml') != ''
         run: node scripts/idle-memory.mjs "${{ matrix.binary }}"
 
-      - name: Installer size gate (<= 25 MB)
-        if: hashFiles('src-tauri/Cargo.toml') != ''
-        run: |
-          status=0
-          node scripts/installer-sizes.mjs > sizes.md || status=$?
-          cat sizes.md
-          {
-            echo "### Installers (${{ matrix.name }}); budget <= 25 MB"
-            cat sizes.md
-          } >> "$GITHUB_STEP_SUMMARY"
-          exit "$status"
-
       - name: Measure budgets (informational)
         if: runner.os == 'macOS' && hashFiles('src-tauri/Cargo.toml') != ''
         run: |
@@ -190,6 +185,18 @@ jobs:
             src-tauri/target/release/bundle/appimage/*.AppImage
           if-no-files-found: error
           retention-days: 14
+
+      - name: Installer size gate (<= 25 MB)
+        if: hashFiles('src-tauri/Cargo.toml') != ''
+        run: |
+          status=0
+          node scripts/installer-sizes.mjs > sizes.md || status=$?
+          cat sizes.md
+          {
+            echo "### Installers (${{ matrix.name }}); budget <= 25 MB"
+            cat sizes.md
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit "$status"
 
   ci-ok:
     name: ci-ok
