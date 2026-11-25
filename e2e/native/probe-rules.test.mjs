@@ -39,6 +39,7 @@ function passingReport() {
         commands: [],
         raw: [{ channel: "action-route", outcome: "rejected Load failed" }],
         connections: [],
+        siblingInit: { siblings: 2, answered: [] },
       },
     },
     mount: { ok: true, ids: ["e2e-probe", "e2e-builtin"] },
@@ -127,6 +128,12 @@ describe("isolation probe rules", () => {
     const registered = passingReport();
     registered.switch.agentRegister = "registered: rlxwidget://localhost/e2e-agent/1/";
     expect(failing(evaluate(registered))).toContain("agent-made widgets switch honoured");
+  });
+
+  it("fails when a sibling's fake init is answered", () => {
+    const report = passingReport();
+    report.host.iframe.siblingInit.answered = ['{"type":"refresh","v":1}'];
+    expect(failing(evaluate(report))).toContain("a sibling frame can't init another widget");
   });
 
   it("fails when the host page navigated away", () => {

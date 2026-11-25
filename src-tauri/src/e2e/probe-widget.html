@@ -175,15 +175,45 @@
         img.src = tag("img");
         return result;
       });
-      for (const rel of ["preconnect", "dns-prefetch", "prefetch"]) {
+      for (const rel of ["preconnect", "dns-prefetch", "prefetch", "preload", "modulepreload"]) {
         await attempt(rel, () => {
           const link = document.createElement("link");
           link.rel = rel;
+          if (rel === "preload") link.as = "fetch";
           link.href = tag(rel);
           document.head.append(link);
           return "added";
         });
       }
+      // Subresources CSP must stop: CSS url(), @import and @font-face, and SVG <image>.
+      await attempt("css-url", () => {
+        const div = document.createElement("div");
+        div.style.backgroundImage = "url(" + tag("css-url") + ")";
+        div.style.width = div.style.height = "4px";
+        document.body.append(div);
+        return "added";
+      });
+      await attempt("css-import-font", () => {
+        const style = document.createElement("style");
+        style.textContent = "@import url(" + tag("css-import") + ");" +
+          "@font-face{font-family:rlxprobe;src:url(" + tag("font-face") + ")}" +
+          ".rlxprobe-font{font-family:rlxprobe}";
+        document.head.append(style);
+        const span = document.createElement("span");
+        span.className = "rlxprobe-font";
+        span.textContent = "x";
+        document.body.append(span);
+        return "added";
+      });
+      await attempt("svg-image", () => {
+        const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+        const image = document.createElementNS("http://www.w3.org/2000/svg", "image");
+        image.setAttribute("href", tag("svg-image"));
+        svg.append(image);
+        document.body.append(svg);
+        return "added";
+      });
+
       await attempt("rtc", () => rtc(window));
       // A child frame's initial about:blank shares this frame's realm rules; try its
       // RTCPeerConnection too, in case this window's was ever removed.
@@ -216,8 +246,45 @@
       return "gathering " + state;
     }
 
+    // A sibling frame must not be able to init another widget: the SDK takes init only from
+    // window.parent, so a fake init with our own port must go unanswered.
+    async function siblingInit() {
+      const answered = [];
+      for (let i = 0; i < window.parent.frames.length; i += 1) {
+        const sibling = window.parent.frames[i];
+        if (sibling === window) continue;
+        const channel = new MessageChannel();
+        channel.port1.onmessage = (event) => answered.push(JSON.stringify(event.data).slice(0, 80));
+        try {
+          sibling.postMessage({ type: "init", v: 1, widgetId: "spoofed-by-sibling", settings: {}, state: {}, theme: {} }, "*", [channel.port2]);
+        } catch (error) {
+          answered.push("threw " + errorText(error));
+        }
+      }
+      await sleep(1500);
+      return { siblings: window.parent.frames.length - 1, answered };
+    }
+
     function navigate() {
       const tag = (kind) => LISTENER + "/" + FROM + "/" + kind;
+      // A hyperlink ping and a meta refresh: both must reach nothing.
+      try {
+        const link = document.createElement("a");
+        link.href = tag("ping-target");
+        link.setAttribute("ping", tag("ping"));
+        document.body.append(link);
+        link.click();
+      } catch (error) {
+        // blocked, as expected
+      }
+      try {
+        const refresh = document.createElement("meta");
+        refresh.httpEquiv = "refresh";
+        refresh.content = "0;url=" + tag("meta-refresh");
+        document.head.append(refresh);
+      } catch (error) {
+        // blocked, as expected
+      }
       try {
         window.open(tag("window-open"));
       } catch (error) {
@@ -266,6 +333,7 @@
       await invokeEverything();
       await rawChannels();
       await connections();
+      report.siblingInit = await siblingInit();
       await sleep(500);
       status.textContent = "done: " + report.commands.length + " commands, " + report.connections.length + " connection attempts";
       window.parent.postMessage({ type: "e2e-probe-report", report }, "*");

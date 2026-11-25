@@ -111,7 +111,7 @@ function evaluateChecks(report, stderr) {
     // On a webview only the probe attached (the product attaches none on this OS), a leak
     // can't reach a user: it keeps the widget webview and agent-made widgets off here.
     (policy.widgetWebview ? check : gate)(
-      `${label}: 0 connections (fetch, XHR, WebSocket, EventSource, beacon, img, prefetch, WebRTC, navigation)`,
+      `${label}: 0 connections (fetch, XHR, WebSocket, EventSource, beacon, img, CSS, fonts, SVG, prefetch, preload, ping, WebRTC, navigation, refresh)`,
       contract.length === 0,
       (contract.length === 0 ? "0 connections, 0 datagrams" : summarizeHits(contract)) +
         (policy.widgetWebview ? "" : " (probe-only webview: the product attaches none on this OS)"),
@@ -226,6 +226,12 @@ function evaluateChecks(report, stderr) {
         : ran.length === 0
           ? `${frameCommands.length} attempted: ${tally(frameCommands)}`
           : ran.slice(0, 8).map((c) => `${c.cmd}: ${c.result} ${c.message}`).join("; "),
+    );
+    const sibling = frame.siblingInit ?? {};
+    check(
+      "a sibling frame can't init another widget",
+      Array.isArray(sibling.answered) && sibling.answered.length === 0,
+      `${sibling.siblings ?? "?"} sibling(s) sent a fake init; answered: ${(sibling.answered ?? []).join(", ") || "none"}`,
     );
     info("widget iframe: raw channels", (frame.raw ?? []).map((r) => `${r.channel} ${r.outcome}`).join("; "));
     info("widget iframe: connection attempts", (frame.connections ?? []).map((c) => `${c.kind} ${c.outcome}`).join("; "));
