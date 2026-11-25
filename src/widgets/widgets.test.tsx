@@ -129,7 +129,7 @@ describe("Gmail dashboard", () => {
     const gmail = await screen.findByRole("region", { name: "Gmail" });
     const needsReply = await within(gmail).findByRole("region", { name: "Needs a reply" });
     fireEvent.click(within(needsReply).getAllByRole("button", { name: "Draft reply" })[0]!);
-    fireEvent.click(screen.getByRole("button", { name: "Approvals" }));
+    fireEvent.click(screen.getByRole("button", { name: /^Approvals/ }));
     const drafts = await screen.findByTestId("drafts");
     expect(within(drafts).getByText("To Tom Okafor")).toBeTruthy();
     const draft = within(drafts).getByText("To Tom Okafor").closest("li") as HTMLElement;

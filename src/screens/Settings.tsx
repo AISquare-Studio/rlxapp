@@ -5,6 +5,7 @@ import { useHostSettings } from "../engine/hooks.ts";
 import { useApp } from "../state/context.ts";
 import { CONNECTOR_NAMES, type Density, type SendMode, type ThemeMode } from "../state/model.ts";
 import { ACCENT_PRESETS, FAMILIES, fitAccent, resolveTheme, type ThemeFamily } from "../theme/themes.ts";
+import { CenterNav } from "../ui/CenterNav.tsx";
 import { Modal } from "../ui/Modal.tsx";
 
 const MODES: { id: SendMode; label: string; help: string }[] = [
@@ -44,11 +45,17 @@ export function Settings({ osDark }: { osDark: boolean }) {
 
   return (
     <div className="settings">
-      <div className="screen-header">
-        <div>
-          <h1>Settings</h1>
-        </div>
-      </div>
+      <CenterNav
+        title="Settings"
+        sections={[
+          { id: "send-safety", label: "Send safety" },
+          { id: "appearance", label: "Appearance" },
+          { id: "agent", label: "Your agent" },
+          { id: "service", label: "rlx service" },
+          { id: "developer", label: "Developer" },
+          { id: "about", label: "About" },
+        ]}
+      />
 
       <section className="settings__section" id="send-safety" aria-labelledby="send-safety-title">
         <h2 id="send-safety-title">Send safety</h2>

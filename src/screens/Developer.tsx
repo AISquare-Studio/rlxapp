@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import type { BoardTask, FleetAgent } from "../engine/types.ts";
 import { useApp } from "../state/context.ts";
+import { CenterNav } from "../ui/CenterNav.tsx";
 import { Icon } from "../ui/Icon.tsx";
 
 const AGENT_STATE: Record<FleetAgent["state"], string> = {
@@ -39,18 +40,33 @@ function OpenInTerminal() {
   );
 }
 
+const DEV_TABS = [
+  { id: "runs", label: "Runs" },
+  { id: "fleet", label: "Fleet" },
+  { id: "board", label: "Board" },
+  { id: "panes", label: "Panes" },
+] as const;
+
+/** Developer mode's navigation line: Runs, Fleet, Board and Panes as tabs, and the terminal hand-off. */
+export function DevNav({ current, title, crumbs }: { current: (typeof DEV_TABS)[number]["id"]; title?: string; crumbs?: { label: string; onSelect: () => void }[] }) {
+  const { navigate } = useApp();
+  return (
+    <CenterNav
+      crumbs={crumbs}
+      title={title ?? DEV_TABS.find((t) => t.id === current)?.label ?? "Developer"}
+      tabsLabel="Developer"
+      tabs={DEV_TABS.map((t) => ({ id: t.id, label: t.label, active: t.id === current, onSelect: () => navigate({ name: t.id }) }))}
+      actions={<OpenInTerminal />}
+    />
+  );
+}
+
 export function Fleet() {
   const { navigate } = useApp();
   const agents = useFleet();
   return (
     <div>
-      <div className="screen-header">
-        <div>
-          <h1>Fleet</h1>
-          <p className="muted">Your rlx agents across projects. Developer mode.</p>
-        </div>
-        <OpenInTerminal />
-      </div>
+      <DevNav current="fleet" />
       <table className="table">
         <thead>
           <tr>
@@ -104,13 +120,7 @@ export function Board() {
   }, [developer]);
   return (
     <div>
-      <div className="screen-header">
-        <div>
-          <h1>Board</h1>
-          <p className="muted">The team board for the web project. Developer mode.</p>
-        </div>
-        <OpenInTerminal />
-      </div>
+      <DevNav current="board" />
       <div className="kanban">
         {COLUMNS.map((col) => (
           <section key={col} className="kanban__col" aria-label={COLUMN_LABEL[col]}>
@@ -140,13 +150,7 @@ export function Panes() {
   useEffect(() => developer.watchPane(selected, setText), [developer, selected]);
   return (
     <div>
-      <div className="screen-header">
-        <div>
-          <h1>Panes</h1>
-          <p className="muted">Read-only views of your agents' terminals. Developer mode.</p>
-        </div>
-        <OpenInTerminal />
-      </div>
+      <DevNav current="panes" />
       <div className="tabs" role="tablist" aria-label="Agent panes">
         {agents.map((a) => (
           <button

@@ -4,6 +4,8 @@ import { PriorityCard } from "../chat/Cards.tsx";
 import { useNow } from "../engine/hooks.ts";
 import { MANAGER_ID, agentStatus, scheduleLabel, wakeLabel } from "../state/agents.ts";
 import { useApp } from "../state/context.ts";
+import { NeedsYou } from "../shell/NeedsYou.tsx";
+import { CenterNav } from "../ui/CenterNav.tsx";
 import { MoreMenu } from "../ui/MoreMenu.tsx";
 import { useOverlayCount } from "../ui/overlays.ts";
 import type { WidgetInstance, WidgetType } from "../state/model.ts";
@@ -134,16 +136,16 @@ export function Home() {
 
   return (
     <div className="home">
-      <div className="screen-header">
-        <div>
-          <h1>Home</h1>
-        </div>
-        <div className="button-row">
+      <CenterNav
+        title="Home"
+        actions={
           <button type="button" className="button" onClick={() => setPicker(true)}>
             <Icon name="plus" size={16} /> Add widget
           </button>
-        </div>
-      </div>
+        }
+      />
+
+      <NeedsYou />
 
       <StartOfDay />
 

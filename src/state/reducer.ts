@@ -42,9 +42,7 @@ export type Action =
   | { type: "briefing"; at: number; card: Extract<Card, { type: "priority" }> }
   | { type: "notice"; notice: Notice }
   | { type: "notice-dismiss"; id: string }
-  | { type: "about"; open: boolean }
-  | { type: "right-panel"; open: boolean }
-  | { type: "home-panel"; open: boolean };
+  | { type: "about"; open: boolean };
 
 function sameScreen(a: Screen | undefined, b: Screen): boolean {
   return JSON.stringify(a) === JSON.stringify(b);
@@ -128,10 +126,6 @@ export function reducer(state: AppState, action: Action): AppState {
       return { ...state, toasts: state.toasts.filter((t) => t.id !== action.id) };
     case "about":
       return { ...state, aboutOpen: action.open };
-    case "right-panel":
-      return { ...state, rightPanel: action.open };
-    case "home-panel":
-      return { ...state, homePanel: action.open };
   }
 }
 
@@ -239,12 +233,10 @@ export function initialState(settings: Settings, now: number): AppState {
     activity,
     toasts: [],
     aboutOpen: false,
-    rightPanel: true,
     messages,
     briefing: null,
     notices: [],
     unread: {},
-    homePanel: false,
   };
 }
 

@@ -3,6 +3,7 @@ import { newRunId, useRunEvents, useRuns } from "../engine/hooks.ts";
 import { STATE_LABEL, taskRuns } from "../engine/runs.ts";
 import type { RunState } from "../engine/types.ts";
 import { useApp } from "../state/context.ts";
+import { DevNav } from "./Developer.tsx";
 import { Icon } from "../ui/Icon.tsx";
 
 export function StateChip({ state }: { state: RunState }) {
@@ -39,12 +40,7 @@ function RunOverview() {
   };
   return (
     <div>
-      <div className="screen-header">
-        <div>
-          <h1>Runs</h1>
-          <p className="muted">Developer mode: every task and agent run with its raw log. At most two tasks run at once.</p>
-        </div>
-      </div>
+      <DevNav current="runs" />
       <form
         className="composer"
         onSubmit={(e) => {
@@ -84,7 +80,7 @@ function RunOverview() {
 }
 
 function RunDetail({ runId }: { runId: string }) {
-  const { engine, toast } = useApp();
+  const { engine, toast, navigate } = useApp();
   const runs = useRuns();
   const run = runs.find((r) => r.id === runId);
   const events = useRunEvents(runId);
@@ -94,14 +90,12 @@ function RunDetail({ runId }: { runId: string }) {
   const question = run.state === "needs-you" ? [...events].reverse().find((e) => e.event.type === "question") : undefined;
   return (
     <div className="task-detail">
-      <div className="screen-header">
-        <div>
-          <h1>{run.title}</h1>
-          <p className="muted">
-            <StateChip state={run.state} /> Started {new Date(run.startedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
-            {run.failureReason ? <span className="error-text"> · {run.failureReason}</span> : null}
-          </p>
-        </div>
+      <DevNav current="runs" title={run.title} crumbs={[{ label: "Runs", onSelect: () => navigate({ name: "runs" }) }]} />
+      <div className="run-meta">
+        <p className="muted">
+          <StateChip state={run.state} /> Started {new Date(run.startedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+          {run.failureReason ? <span className="error-text"> · {run.failureReason}</span> : null}
+        </p>
         <div className="button-row">
           {run.state === "running" || run.state === "queued" || run.state === "needs-you" ? (
             <button

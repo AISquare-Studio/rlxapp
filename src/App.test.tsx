@@ -47,59 +47,60 @@ describe("App", () => {
     expect(await screen.findByText("Signed in", { selector: "strong" })).toBeTruthy();
   });
 
-  it("lays out like a chat app: spaces, channels and DMs, the conversation and a detail panel", async () => {
+  it("lays out like a chat app in two panes: navigation and the agents list, then the conversation", async () => {
     await renderApp(onboarded);
-    const spaces = await screen.findByRole("navigation", { name: "Spaces" });
-    expect(within(spaces).getByRole("button", { name: "Home" })).toBeTruthy();
-    const dms = screen.getByRole("list", { name: "Direct messages" });
-    expect(within(dms).getByRole("button", { name: "Manager, setup assistant" })).toBeTruthy();
-    const channels = screen.getByRole("list", { name: "Agent channels" });
+    const nav = await screen.findByRole("navigation", { name: "Navigation" });
+    const channels = within(nav).getByRole("list", { name: "Agent channels" });
+    // The Manager comes first, then each agent with its status.
+    const names = within(channels).getAllByRole("button").map((b) => b.getAttribute("aria-label"));
+    expect(names[0]).toBe("Manager, setup assistant");
     expect(within(channels).getByRole("button", { name: "Slack agent, Asleep" })).toBeTruthy();
     expect(within(channels).getByRole("button", { name: "Meetings agent, Scheduled 08:45" })).toBeTruthy();
     expect(await within(channels).findByRole("button", { name: "GTM agent, Running" })).toBeTruthy();
-    // Home stays calm: no side panel until asked for; it then shows only what needs you.
+    // No side column: what needs you sits in place on Home.
     expect(screen.queryByRole("complementary")).toBeNull();
-    fireEvent.click(screen.getByRole("button", { name: /^Needs you/ }));
-    expect(screen.getByRole("complementary", { name: "Needs you" })).toBeTruthy();
+    fireEvent.click(within(screen.getByTestId("needs-you")).getByText(/^Needs you ·/));
+    expect(await screen.findByTestId("run-question")).toBeTruthy();
     fireEvent.click(within(channels).getByRole("button", { name: "Slack agent, Asleep" }));
-    expect(screen.getByRole("complementary", { name: "Details" })).toBeTruthy();
     expect(await screen.findByRole("heading", { level: 1, name: "# slack-agent" })).toBeTruthy();
     expect(screen.getByRole("textbox", { name: "Message Slack agent" })).toBeTruthy();
+    // The agent's details open in place, under the navigation line.
     expect(within(screen.getByTestId("agent-details")).getByText("Every 15 min")).toBeTruthy();
+    expect(screen.getByText("About Slack agent")).toBeTruthy();
   });
 
   it("shows every screen, with Developer (runs, fleet, board, panes) only while it is on", async () => {
     await renderApp(onboarded);
-    const spaces = await screen.findByRole("navigation", { name: "Spaces" });
+    const nav = await screen.findByRole("navigation", { name: "Navigation" });
     for (const [label, heading] of [
       ["Agents", "Agents"],
-      ["Approvals", "Approvals"],
+      [/^Approvals/, "Approvals"],
       ["Dashboard", "Home"],
     ] as const) {
-      fireEvent.click(screen.getByRole("button", { name: label }));
+      fireEvent.click(within(nav).getByRole("button", { name: label }));
       expect(await screen.findByRole("heading", { level: 1, name: heading })).toBeTruthy();
     }
-    fireEvent.click(within(spaces).getByRole("button", { name: "New agent" }));
+    fireEvent.click(within(nav).getByRole("button", { name: "Create an agent with the manager" }));
     expect(await screen.findByRole("heading", { level: 1, name: "Manager" })).toBeTruthy();
-    fireEvent.click(within(spaces).getByRole("button", { name: "Settings" }));
+    fireEvent.click(within(nav).getByRole("button", { name: "Settings" }));
     expect(await screen.findByRole("heading", { level: 1, name: "Settings" })).toBeTruthy();
-    expect(within(spaces).queryByRole("button", { name: "Developer" })).toBeNull();
+    expect(within(nav).queryByRole("button", { name: "Developer" })).toBeNull();
     fireEvent.click(screen.getByRole("switch", { name: /Developer mode/ }));
-    fireEvent.click(within(spaces).getByRole("button", { name: "Developer" }));
+    fireEvent.click(within(nav).getByRole("button", { name: "Developer" }));
     expect(await screen.findByRole("heading", { level: 1, name: "Runs" })).toBeTruthy();
     for (const label of ["Fleet", "Board", "Panes"]) {
-      fireEvent.click(within(screen.getByRole("navigation", { name: /navigation$/ })).getByRole("button", { name: label }));
+      fireEvent.click(screen.getByRole("tab", { name: label }));
       expect(await screen.findByRole("heading", { level: 1, name: label })).toBeTruthy();
     }
     expect(screen.getByRole("button", { name: /Open in terminal/ })).toBeTruthy();
-    fireEvent.click(within(spaces).getByRole("button", { name: "Settings" }));
+    fireEvent.click(within(nav).getByRole("button", { name: "Settings" }));
     fireEvent.click(screen.getByRole("switch", { name: /Developer mode/ }));
-    expect(within(spaces).queryByRole("button", { name: "Developer" })).toBeNull();
+    expect(within(nav).queryByRole("button", { name: "Developer" })).toBeNull();
   });
 
   it("moves an approved draft to the activity log with the sign-off", async () => {
     await renderApp(onboarded);
-    fireEvent.click(await screen.findByRole("button", { name: "Approvals" }));
+    fireEvent.click(await screen.findByRole("button", { name: /^Approvals/ }));
     const drafts = await screen.findByTestId("drafts");
     fireEvent.click(within(drafts).getAllByRole("button", { name: /Approve and send/ })[0]!);
     fireEvent.click(screen.getByRole("tab", { name: /Activity/ }));
@@ -175,7 +176,7 @@ describe("rlx service settings", () => {
   it("toggles Start rlx at login and the menu-bar icon through the engine, on by default", async () => {
     const engine = new FakeEngine({ stepMs: 50 });
     render(<App platform={browserPlatform} engine={engine} initialSettings={onboarded} />);
-    fireEvent.click(within(await screen.findByRole("navigation", { name: "Spaces" })).getByRole("button", { name: "Settings" }));
+    fireEvent.click(within(await screen.findByRole("navigation", { name: "Navigation" })).getByRole("button", { name: "Settings" }));
     const login = (await screen.findByRole("switch", { name: "Start rlx at login" })) as HTMLInputElement;
     await vi.waitFor(() => expect(login.checked).toBe(true));
     fireEvent.click(login);
@@ -188,5 +189,40 @@ describe("rlx service settings", () => {
     await vi.waitFor(() => expect(login.checked).toBe(true));
     // Nothing about the service is stored in the app's own settings.
     expect(localStorage.getItem("rlx.settings.v1") ?? "").not.toMatch(/startAtLogin|serviceTrayIcon/);
+  });
+});
+
+describe("2-way split (owner amendment 4)", () => {
+  /** The panes beside each other in the window, and its vertical dividers. */
+  function columns() {
+    const body = screen.getByTestId("shell-body");
+    const panes = [...body.children].filter((el) => el.getAttribute("role") !== "separator");
+    const dividers = document.querySelectorAll("[role='separator'][aria-orientation='vertical']");
+    return { panes: panes.map((el) => el.getAttribute("data-pane")), dividers: dividers.length };
+  }
+
+  it("shows exactly the left pane and the centre, with one vertical divider, on every screen", async () => {
+    render(<App platform={browserPlatform} engine={new FakeEngine({ stepMs: 50 })} initialSettings={{ ...onboarded, devMode: true }} />);
+    const nav = await screen.findByRole("navigation", { name: "Navigation" });
+    const visit: [string, () => void][] = [
+      ["Home", () => fireEvent.click(within(nav).getByRole("button", { name: "Dashboard" }))],
+      ["Agents", () => fireEvent.click(within(nav).getByRole("button", { name: "Agents" }))],
+      ["Approvals", () => fireEvent.click(within(nav).getByRole("button", { name: /^Approvals/ }))],
+      ["Settings", () => fireEvent.click(within(nav).getByRole("button", { name: "Settings" }))],
+      ["Runs", () => fireEvent.click(within(nav).getByRole("button", { name: "Developer" }))],
+      ["Fleet", () => fireEvent.click(screen.getByRole("tab", { name: "Fleet" }))],
+      ["Board", () => fireEvent.click(screen.getByRole("tab", { name: "Board" }))],
+      ["Panes", () => fireEvent.click(screen.getByRole("tab", { name: "Panes" }))],
+      ["Manager", () => fireEvent.click(within(nav).getByRole("button", { name: "Manager, setup assistant" }))],
+      ["# slack-agent", () => fireEvent.click(within(nav).getByRole("button", { name: /^Slack agent/ }))],
+    ];
+    for (const [heading, go] of visit) {
+      go();
+      expect(await screen.findByRole("heading", { level: 1, name: heading })).toBeTruthy();
+      expect({ heading, ...columns() }).toEqual({ heading, panes: ["left", "centre"], dividers: 1 });
+      expect(screen.queryByRole("complementary")).toBeNull();
+      expect(document.querySelector(".rail, .right-panel")).toBeNull();
+      expect(screen.getByTestId("center-nav")).toBeTruthy();
+    }
   });
 });

@@ -3,6 +3,7 @@ import { SignOff } from "../brand/SignOff.tsx";
 import { useApp } from "../state/context.ts";
 import type { Draft, StandingApproval } from "../state/model.ts";
 import { Icon } from "../ui/Icon.tsx";
+import { CenterNav } from "../ui/CenterNav.tsx";
 import { Modal } from "../ui/Modal.tsx";
 import { MoreMenu } from "../ui/MoreMenu.tsx";
 
@@ -24,30 +25,15 @@ function time(ms: number): string {
 }
 
 export function Approvals() {
-  const { screen, navigate, state } = useApp();
+  const { screen, navigate } = useApp();
   const tab = screen.name === "approvals" ? screen.tab : "drafts";
   return (
     <div>
-      <div className="screen-header">
-        <div>
-          <h1>Approvals</h1>
-          <p className="muted">Nothing is sent without your say-so. Every send carries {state.settings.agentName}'s sign-off.</p>
-        </div>
-      </div>
-      <div className="tabs" role="tablist" aria-label="Approvals">
-        {TABS.map((t) => (
-          <button
-            key={t.id}
-            type="button"
-            role="tab"
-            aria-selected={tab === t.id}
-            className={`tab${tab === t.id ? " is-active" : ""}`}
-            onClick={() => navigate({ name: "approvals", tab: t.id })}
-          >
-            {t.label}
-          </button>
-        ))}
-      </div>
+      <CenterNav
+        title="Approvals"
+        tabsLabel="Approvals"
+        tabs={TABS.map((t) => ({ id: t.id, label: t.label, active: tab === t.id, onSelect: () => navigate({ name: "approvals", tab: t.id }) }))}
+      />
       <div role="tabpanel" aria-label={TABS.find((t) => t.id === tab)?.label}>
         {tab === "drafts" ? <Drafts /> : null}
         {tab === "standing" ? <Standing /> : null}

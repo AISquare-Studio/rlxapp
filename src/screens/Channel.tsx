@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { AgentActions, StatusChip } from "../agents/AgentDetails.tsx";
+import { AgentActions, AgentDetails, StatusChip } from "../agents/AgentDetails.tsx";
 import { nextId, useAgents } from "../agents/useAgents.ts";
 import { CardView } from "../chat/Cards.tsx";
 import { newRunId, useNow } from "../engine/hooks.ts";
@@ -8,6 +8,7 @@ import { MANAGER_ID, agentStatus, type Agent } from "../state/agents.ts";
 import { useApp } from "../state/context.ts";
 import type { Message, Proposal } from "../state/model.ts";
 import { Avatar } from "../ui/Avatar.tsx";
+import { CenterNav } from "../ui/CenterNav.tsx";
 import { Icon } from "../ui/Icon.tsx";
 
 const MANAGER_SUGGESTIONS = [
@@ -89,19 +90,28 @@ function Conversation({ id, agent }: { id: string; agent?: Agent }) {
 
   return (
     <div className="channel">
-      <header className="channel__header">
-        <Avatar letter={isManager ? "r" : (agent?.avatar ?? "?")} status={status?.kind} manager={isManager} />
-        <div className="channel__title">
-          <h1>{isManager ? "Manager" : `# ${name.toLowerCase().replace(/\s+/g, "-")}`}</h1>
-          {agent && status ? null : <span className="muted">Your setup assistant</span>}
-        </div>
-        {agent && status ? (
-          <div className="button-row">
-            <StatusChip status={status} />
-            <AgentActions agent={agent} compact extra={demo && agent.role === "briefing" ? [{ label: "Simulate 9:00 (demo)", onSelect: simulateNine }] : []} />
-          </div>
+      <div className="channel__top">
+        <CenterNav
+          lead={<Avatar letter={isManager ? "r" : (agent?.avatar ?? "?")} status={status?.kind} manager={isManager} />}
+          title={isManager ? "Manager" : `# ${name.toLowerCase().replace(/\s+/g, "-")}`}
+          actions={
+            agent && status ? (
+              <>
+                <StatusChip status={status} />
+                <AgentActions agent={agent} compact extra={demo && agent.role === "briefing" ? [{ label: "Simulate 9:00 (demo)", onSelect: simulateNine }] : []} />
+              </>
+            ) : (
+              <span className="muted">Your setup assistant</span>
+            )
+          }
+        />
+        {agent ? (
+          <details className="fold channel__about">
+            <summary>About {agent.name}</summary>
+            <AgentDetails agent={agent} />
+          </details>
         ) : null}
-      </header>
+      </div>
       <ol className="messages" aria-label={`Messages in ${name}`} aria-live="polite" data-testid="messages">
         {messages.length === 0 ? (
           <li className="messages__empty muted">

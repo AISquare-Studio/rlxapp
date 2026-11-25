@@ -5,15 +5,16 @@ import { openShell } from "./helpers.ts";
 
 test("A, B: a chat layout with agents as channels, and an Agents section with running, scheduled and asleep agents", async ({ page }) => {
   await openShell(page);
-  await expect(page.getByRole("navigation", { name: "Spaces" })).toBeVisible();
-  await expect(page.getByRole("list", { name: "Direct messages" }).getByRole("button", { name: "Manager, setup assistant" })).toBeVisible();
+  await expect(page.getByRole("navigation", { name: "Navigation" })).toBeVisible();
+  await expect(page.getByRole("list", { name: "Agent channels" }).getByRole("button").first()).toHaveAccessibleName("Manager, setup assistant");
   const channels = page.getByRole("list", { name: "Agent channels" });
   await expect(channels.getByRole("button", { name: "GTM agent, Running" })).toBeVisible();
   await expect(channels.getByRole("button", { name: "Meetings agent, Scheduled 08:45" })).toBeVisible();
   await expect(channels.getByRole("button", { name: "Slack agent, Asleep" })).toBeVisible();
   await expect(page.getByRole("complementary")).toHaveCount(0);
+  await expect(page.locator("[data-testid=shell-body] > [data-pane]")).toHaveCount(2);
 
-  await page.getByRole("button", { name: "Agents", exact: true }).click();
+  await page.getByRole("navigation", { name: "Navigation" }).getByRole("button", { name: "Agents", exact: true }).click();
   const meetings = page.getByTestId("agent-row-meetings-agent");
   await expect(meetings).toContainText("Next wake");
   await meetings.getByText("Details").click();
@@ -81,7 +82,7 @@ test("F: the Slack widget refreshes silently with no model turn, and takes one w
 
 test("G: no raw run logs outside Developer mode", async ({ page }) => {
   await openShell(page);
-  await expect(page.getByRole("navigation", { name: "Spaces" }).getByRole("button", { name: "Developer" })).toHaveCount(0);
+  await expect(page.getByRole("navigation", { name: "Navigation" }).getByRole("button", { name: "Developer" })).toHaveCount(0);
   await page.getByRole("button", { name: "GTM agent, Running" }).click();
   await expect(page.getByRole("heading", { level: 1, name: "# gtm-agent" })).toBeVisible();
   await expect(page.getByTestId("task-log")).toHaveCount(0);

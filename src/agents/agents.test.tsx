@@ -225,7 +225,7 @@ describe("Start of day", () => {
     fireEvent.click(within(draft).getByRole("button", { name: /Send/ }));
     expect(within(draft).getByText(expected)).toBeTruthy();
 
-    fireEvent.click(screen.getByRole("button", { name: "Approvals" }));
+    fireEvent.click(screen.getByRole("button", { name: /^Approvals/ }));
     const drafts = await screen.findByTestId("drafts");
     const aiko = within(drafts).getByText("To Aiko Tanaka").closest("li") as HTMLElement;
     expect(within(aiko).getByTestId("sign-off").textContent).toBe(expected);

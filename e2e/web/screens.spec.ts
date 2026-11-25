@@ -30,14 +30,22 @@ test("onboarding: welcome, Claude Code status, naming the agent with a live sign
 test("every screen is reachable by clicking from Home, with no console errors", async ({ page }) => {
   const errors = watchErrors(page);
   await openShell(page);
-  const spaces = page.getByRole("navigation", { name: "Spaces" });
+  const nav = page.getByRole("navigation", { name: "Navigation" });
+  // The window is a 2-way split on every screen: the left pane and the centre, one divider.
+  const twoPanes = async () => {
+    await expect(page.locator("[data-testid=shell-body] > [data-pane]")).toHaveCount(2);
+    await expect(page.locator("[role=separator][aria-orientation=vertical]")).toHaveCount(1);
+  };
   await expect(page.getByRole("heading", { level: 1, name: "Home" })).toBeVisible();
+  await twoPanes();
   await expect(page.locator('iframe[title="Open pull requests"]')).toBeVisible();
 
-  await page.getByRole("button", { name: "Agents", exact: true }).click();
+  await nav.getByRole("button", { name: "Agents", exact: true }).click();
   await expect(page.getByRole("heading", { level: 1, name: "Agents" })).toBeVisible();
+  await twoPanes();
 
-  await page.getByRole("button", { name: "Approvals", exact: true }).click();
+  await nav.getByRole("button", { name: /^Approvals/ }).click();
+  await twoPanes();
   await page.getByRole("tab", { name: /Standing approvals/ }).click();
   await expect(page.getByRole("button", { name: "Revoke" }).first()).toBeVisible();
   await page.getByRole("tab", { name: /Activity/ }).click();
@@ -47,11 +55,14 @@ test("every screen is reachable by clicking from Home, with no console errors", 
   await page.getByLabel("Message Gmail agent").fill("What needs me today?");
   await page.getByRole("button", { name: "Send" }).click();
   await expect(page.getByTestId("messages")).toContainText("Priya");
+  await twoPanes();
 
-  await spaces.getByRole("button", { name: "Settings" }).click();
+  await nav.getByRole("button", { name: "Settings" }).click();
+  await twoPanes();
   await page.getByRole("switch", { name: /Developer mode/ }).check();
-  await spaces.getByRole("button", { name: "Developer" }).click();
+  await nav.getByRole("button", { name: "Developer" }).click();
   await expect(page.getByRole("heading", { level: 1, name: "Runs" })).toBeVisible();
+  await twoPanes();
   for (const state of ["Queued", "Running", "Needs you", "Done", "Failed"]) {
     await expect(page.getByRole("region", { name: state })).toBeVisible({ timeout: 10_000 });
   }
@@ -59,8 +70,9 @@ test("every screen is reachable by clicking from Home, with no console errors", 
   await expect(page.getByTestId("task-log")).toBeVisible();
   await expect(page.getByRole("button", { name: "Cancel" })).toBeVisible();
   for (const name of ["Fleet", "Board", "Panes"]) {
-    await page.getByRole("navigation", { name: /navigation$/ }).getByRole("button", { name }).click();
+    await page.getByRole("tab", { name }).click();
     await expect(page.getByRole("heading", { level: 1, name })).toBeVisible();
+    await twoPanes();
   }
   await expect(page.getByTestId("pane-output")).toContainText("Build the pricing table");
   await page.getByRole("button", { name: /Open in terminal/ }).click();
@@ -93,7 +105,7 @@ test("every control is reachable with Tab and shows a focus ring", async ({ page
 test("prefers-reduced-motion turns animations off", async ({ page }) => {
   await page.emulateMedia({ reducedMotion: "reduce" });
   await openShell(page);
-  await page.locator(".rail__button").first().waitFor();
-  const duration = await page.evaluate(() => getComputedStyle(document.querySelector(".rail__button")!).transitionDuration);
+  await page.locator(".button").first().waitFor();
+  const duration = await page.evaluate(() => getComputedStyle(document.querySelector(".button")!).transitionDuration);
   expect(duration).toBe("0s");
 });

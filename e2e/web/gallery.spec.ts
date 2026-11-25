@@ -26,11 +26,11 @@ for (const theme of ["dark", "light"] as const) {
 
   test(`main screens in ${label}`, async ({ page }) => {
     await openShell(page, { theme, devMode: true });
-    const spaces = page.getByRole("navigation", { name: "Spaces" });
+    const nav = page.getByRole("navigation", { name: "Navigation" });
     await page.locator('iframe[title="Open pull requests"]').waitFor();
     await page.waitForTimeout(800);
     await shot(page, `${label}-05-home`);
-    await page.getByRole("button", { name: "Agents", exact: true }).click();
+    await nav.getByRole("button", { name: "Agents", exact: true }).click();
     await page.waitForTimeout(300);
     await shot(page, `${label}-06-agents`);
     await page.getByRole("button", { name: "More actions for Meetings agent" }).click();
@@ -77,13 +77,13 @@ for (const theme of ["dark", "light"] as const) {
     await shot(page, `${label}-16-ask-agent-widget`);
     await page.getByRole("button", { name: "Close" }).click();
 
-    await page.getByRole("button", { name: "Approvals", exact: true }).click();
+    await nav.getByRole("button", { name: /^Approvals/ }).click();
     await shot(page, `${label}-17-approvals-drafts`);
     await page.getByRole("tab", { name: /Standing approvals/ }).click();
     await shot(page, `${label}-18-approvals-standing`);
     await page.getByRole("tab", { name: /Activity/ }).click();
     await shot(page, `${label}-19-approvals-activity`);
-    await spaces.getByRole("button", { name: "Settings" }).click();
+    await nav.getByRole("button", { name: "Settings" }).click();
     await shot(page, `${label}-20-settings`);
     const slack = page.getByRole("group", { name: "Slack" });
     await slack.getByText("Auto", { exact: true }).click();
@@ -92,7 +92,7 @@ for (const theme of ["dark", "light"] as const) {
     await shot(page, `${label}-21-settings-auto-risk`);
     await page.getByRole("button", { name: "Keep drafts" }).click();
 
-    await spaces.getByRole("button", { name: "Developer" }).click();
+    await nav.getByRole("button", { name: "Developer" }).click();
     await page.waitForTimeout(1500);
     await shot(page, `${label}-22-dev-runs`);
     await page.getByRole("region", { name: "Running" }).getByRole("button").first().click();
@@ -103,7 +103,7 @@ for (const theme of ["dark", "light"] as const) {
       ["Board", "25-dev-board"],
       ["Panes", "26-dev-panes"],
     ] as const) {
-      await page.getByRole("navigation", { name: /navigation$/ }).getByRole("button", { name }).click();
+      await page.getByRole("tab", { name }).click();
       await page.waitForTimeout(name === "Panes" ? 3000 : 300);
       await shot(page, `${label}-${file}`);
     }

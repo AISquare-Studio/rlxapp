@@ -172,15 +172,12 @@ export interface AppState {
   activity: ActivityItem[];
   toasts: Toast[];
   aboutOpen: boolean;
-  rightPanel: boolean;
   messages: Message[];
   /** The Home dashboard's "Start of day" section, from the latest loud run. */
   briefing: { at: number; card: Extract<Card, { type: "priority" }> } | null;
   notices: Notice[];
   /** Unread agent messages, by channel. */
   unread: Record<string, number>;
-  /** The detail panel on Home: closed by default (calm), and then it shows only Needs you. */
-  homePanel: boolean;
 }
 
 export const CONNECTOR_NAMES = ["claude.ai Slack", "claude.ai Gmail", "claude.ai Linear"] as const;

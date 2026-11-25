@@ -4,7 +4,9 @@ import { useNow } from "../engine/hooks.ts";
 import { MANAGER_ID, agentStatus, scheduleLabel, wakeLabel } from "../state/agents.ts";
 import { useApp } from "../state/context.ts";
 import { Avatar } from "../ui/Avatar.tsx";
+import { CenterNav } from "../ui/CenterNav.tsx";
 import { Icon } from "../ui/Icon.tsx";
+import { MoreMenu } from "../ui/MoreMenu.tsx";
 
 /** Every agent: its state, next wake, last run and outcome, connectors, silent or loud, and its actions. */
 export function Agents() {
@@ -14,22 +16,17 @@ export function Agents() {
   const hasBriefing = agents.some((a) => a.role === "briefing");
   return (
     <div className="agents-screen">
-      <div className="screen-header">
-        <div>
-          <h1>Agents</h1>
-          <p className="muted">Asleep until their schedule wakes them.</p>
-        </div>
-        <div className="button-row">
-          {demo && hasBriefing ? (
-            <button type="button" className="button" onClick={simulateNine} title="Demo control: fire the weekday 09:00 schedule now">
-              <Icon name="play" size={16} /> Simulate 9:00 <span className="demo-tag">demo</span>
+      <CenterNav
+        title="Agents"
+        actions={
+          <>
+            <button type="button" className="button button--primary" onClick={() => navigate({ name: "channel", id: MANAGER_ID })}>
+              <Icon name="plus" size={16} /> New agent
             </button>
-          ) : null}
-          <button type="button" className="button button--primary" onClick={() => navigate({ name: "channel", id: MANAGER_ID })}>
-            <Icon name="plus" size={16} /> New agent
-          </button>
-        </div>
-      </div>
+            {demo && hasBriefing ? <MoreMenu label="More actions for Agents" items={[{ label: "Simulate 9:00 (demo)", onSelect: simulateNine }]} /> : null}
+          </>
+        }
+      />
       <ul className="agent-rows" aria-label="Your agents">
         {agents.map((agent) => {
           const status = agentStatus(agent, running.has(agent.id), now);

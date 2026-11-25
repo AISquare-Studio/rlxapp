@@ -4,7 +4,6 @@ import { useNow } from "../engine/hooks.ts";
 import { agentStatus, avatarFor, scheduleLabel, wakeLabel, type Agent, type AgentStatus } from "../state/agents.ts";
 import { useApp } from "../state/context.ts";
 import type { Proposal } from "../state/model.ts";
-import { Avatar } from "../ui/Avatar.tsx";
 import { Icon } from "../ui/Icon.tsx";
 import type { MenuItem } from "../ui/MoreMenu.tsx";
 import { Modal } from "../ui/Modal.tsx";
@@ -101,23 +100,17 @@ function EditAgentDialog({ agent, onClose, onSave }: { agent: Agent; onClose: ()
   );
 }
 
-/** The detail panel in an agent's channel. */
+/** An agent's details, in place under its channel's navigation line (which already names it). */
 export function AgentDetails({ agent }: { agent: Agent }) {
   const { running } = useAgents();
   const now = useNow(30_000);
   const status = agentStatus(agent, running.has(agent.id), now);
   return (
     <div className="agent-details" data-testid="agent-details">
-      <div className="agent-details__head">
-        <Avatar letter={agent.avatar} status={status.kind} size="lg" />
-        <div>
-          <strong>{agent.name}</strong>
-          <div>
-            <StatusChip status={status} /> <ModeChip agent={agent} />
-          </div>
-        </div>
-      </div>
       <p className="muted">{agent.purpose}</p>
+      <p>
+        <ModeChip agent={agent} />
+      </p>
       <dl className="facts">
         <dt>Schedule</dt>
         <dd>{scheduleLabel(agent.schedule)}</dd>
