@@ -101,11 +101,17 @@ function evaluateChecks(report, stderr) {
     `${control.length} recorded; main saw ${main.canary?.result ?? "nothing"}`,
   );
   const stray = canary.filter((call) => !(call.from === "main-control" && call.webview === "main"));
-  check(
-    "canary: 0 calls from widgets",
-    stray.length === 0,
-    stray.length === 0 ? "0 calls" : stray.map((c) => `${c.from} via ${c.webview}`).join(", "),
-  );
+  if (!probed && stray.length === 0) {
+    // No widget code ran on this OS, so "0 calls" would prove nothing. Any stray call would
+    // still fail below.
+    info("canary: 0 calls from widgets", "n/a: no widget surface on this OS");
+  } else {
+    check(
+      "canary: 0 calls from widgets",
+      stray.length === 0,
+      stray.length === 0 ? "0 calls" : stray.map((c) => `${c.from} via ${c.webview}`).join(", "),
+    );
+  }
 
   // Connections. Each side has its own listener; a hit is classified by what it carried.
   for (const side of ["host", "iframe"]) {
@@ -237,15 +243,23 @@ function evaluateChecks(report, stderr) {
       `origin ${frame.origin}; ${leaks.length === 0 ? "all blocked" : leaks.map(([k, v]) => `${k} ${v}`).join("; ")}`,
     );
     info("widget iframe channels", describeChannels(frame.channels));
+    // Say what the evidence shows. From the iframe, a call can be rejected by the ACL (the
+    // reply reaches the iframe) or go unanswered (the reply, if any, goes to the host
+    // frame). Neither ran a command; the canary is the proof that nothing did.
     const frameCommands = frame.commands ?? [];
     const ran = frameCommands.filter((c) => c.result === "resolved" || (c.result === "rejected" && !ACL_REJECTION.test(c.message)));
+    const rejected = frameCommands.filter((c) => c.result === "rejected" && ACL_REJECTION.test(c.message)).length;
+    const unanswered = frameCommands.filter((c) => c.result === "timeout" || c.result === "threw").length;
+    const ownCanary = frameCommands.some((c) => c.cmd === "e2e_canary");
+    const canaryNote = stray.length === 0 ? `canary 0${ownCanary ? ", including the iframe's own canary call" : ""}` : `canary ${stray.length}`;
+    const parts = [rejected > 0 ? `${rejected} rejected by the ACL` : "", unanswered > 0 ? `${unanswered} unanswered` : ""].filter(Boolean);
     check(
-      "widget iframe: every command rejected",
-      ran.length === 0,
+      "widget iframe: no command ran",
+      ran.length === 0 && stray.length === 0,
       frameCommands.length === 0
-        ? "no invoke() in the iframe; raw channels only (see the canary)"
+        ? `no invoke() in the iframe; raw channels only (${canaryNote})`
         : ran.length === 0
-          ? `${frameCommands.length} attempted: ${tally(frameCommands)}`
+          ? `${parts.join(", ")}; ${canaryNote}`
           : ran.slice(0, 8).map((c) => `${c.cmd}: ${c.result} ${c.message}`).join("; "),
     );
     const sibling = frame.siblingInit ?? {};
@@ -361,13 +375,6 @@ function sample(commands) {
   return first ? `e.g. "${first.message}"` : "";
 }
 
-function tally(commands) {
-  const counts = {};
-  for (const c of commands) counts[c.result] = (counts[c.result] ?? 0) + 1;
-  return Object.entries(counts)
-    .map(([result, n]) => `${n} ${result}`)
-    .join(", ");
-}
 
 /** A markdown table of the checks, for the job summary and the PR. */
 export function toMarkdown(title, checks) {

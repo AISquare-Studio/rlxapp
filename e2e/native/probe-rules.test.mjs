@@ -92,12 +92,24 @@ describe("isolation probe rules", () => {
     expect(failing(evaluate(report))).toContain("host page: every command rejected");
   });
 
-  it("accepts silence from the iframe but not a resolved command", () => {
+  it("calls unanswered iframe commands 'no command ran', never 'rejected'", () => {
     const report = passingReport();
-    report.host.iframe.commands = [{ cmd: "app_info", result: "timeout", message: "no response" }];
-    expect(passed(evaluate(report))).toBe(true);
-    report.host.iframe.commands.push({ cmd: "e2e_canary", result: "resolved", message: "1" });
-    expect(failing(evaluate(report))).toContain("widget iframe: every command rejected");
+    // Windows: WebView2 gives the iframe a keyed invoke(), and every call goes unanswered.
+    report.host.iframe.commands = Array.from({ length: 174 }, (_, i) => ({
+      cmd: i === 0 ? "e2e_canary" : `cmd_${i}`,
+      result: "timeout",
+      message: "no response in 6000 ms",
+    }));
+    const row = evaluate(report).find((c) => c.id === "widget iframe: no command ran");
+    expect(row.ok).toBe(true);
+    expect(row.detail).toBe("174 unanswered; canary 0, including the iframe's own canary call");
+    expect(evaluate(report).some((c) => c.id === "widget iframe: every command rejected")).toBe(false);
+    // A resolved call, or a canary call from the iframe, fails the row.
+    report.host.iframe.commands.push({ cmd: "app_info", result: "resolved", message: "{}" });
+    expect(failing(evaluate(report))).toContain("widget iframe: no command ran");
+    report.host.iframe.commands.pop();
+    report.canary.push({ from: "widget-iframe-invoke", webview: "widgets" });
+    expect(failing(evaluate(report))).toContain("widget iframe: no command ran");
   });
 
   it("never fails on raw channels merely existing", () => {
@@ -184,6 +196,25 @@ describe("isolation probe rules", () => {
     expect(toMarkdown("probe", evaluate(report))).toContain("no widget webview in v0");
     report.webviews = ["main", "widgets"];
     expect(failing(evaluate(report))).toContain("no other webviews");
+  });
+
+  it("marks the canary n/a where no widget code ran (Linux), but still fails a stray call", () => {
+    const report = passingReport();
+    report.policy = { widgetWebview: false, builtins: "main", agentWidgets: "off: no widget webview" };
+    report.switch = {
+      agentRegister: "refused: agent-made widgets are off",
+      builtinRegister: "refused: this OS has no widget webview in v0",
+      attach: "refused: this OS has no widget webview in v0",
+      probeAttach: "not needed",
+    };
+    report.webviews = ["main"];
+    report.host = null;
+    report.actions = [];
+    const row = evaluate(report).find((c) => c.id === "canary: 0 calls from widgets");
+    expect(row.info).toBe(true);
+    expect(row.detail).toBe("n/a: no widget surface on this OS");
+    report.canary.push({ from: "somewhere", webview: "widgets" });
+    expect(failing(evaluate(report))).toContain("canary: 0 calls from widgets");
   });
 
   it("probes a webview the product doesn't attach, when the probe attached one (Windows)", () => {
