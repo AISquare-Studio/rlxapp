@@ -92,6 +92,14 @@ pub fn resolve_engine_home(
         .map(str::trim)
         .filter(|v| !v.is_empty())
         .unwrap_or(SANDBOX_HOME);
+    // A path that names the real home anywhere is refused first, whatever the OS thinks of
+    // its form ('/x/<real home>' isn't absolute on Windows, but it's never allowed).
+    let names_real_home = value
+        .split(['/', '\\'])
+        .any(|part| part.to_lowercase() == REAL_HOME_DIR);
+    if names_real_home {
+        return Err(HomeError::RealHome);
+    }
     let expanded = if value == "~" {
         user_home.to_path_buf()
     } else if let Some(rest) = value
@@ -168,6 +176,7 @@ mod tests {
             absolute.clone(),
             format!("{absolute}/sub"),
             format!("/elsewhere/{real}"),
+            format!("C:\\elsewhere\\{upper}\\sub"),
         ];
         if cfg!(unix) {
             spellings.push("~/alias".to_owned());
