@@ -52,6 +52,11 @@ interface RunRecord {
   pending: string[];
   /** Milliseconds between this run's steps, if not the engine's. */
   stepMs?: number;
+  /**
+   * Finishes on its own timer (agent runs, chat turns, widget refreshes…). The task scheduler
+   * must never pick it up: it would finish it with a scripted task's output instead.
+   */
+  instant?: boolean;
   failureReason?: string;
 }
 
@@ -159,6 +164,7 @@ export class FakeEngine implements Engine, DeveloperEngine {
       record.pending = [...(TASK_SCRIPTS[record.title] ?? TASK_SCRIPTS.default ?? [])];
       this.schedule();
     } else {
+      record.instant = true;
       // An agent run takes a moment, so its "running" state shows; the briefing a little longer.
       const delay = !req.prompt.startsWith(AGENT_PREFIX) ? 300 : req.prompt.includes(BRIEFING_ROLE) ? 2 * this.stepMs : this.stepMs;
       this.later(record, delay, () => this.finishInstant(record));
@@ -314,7 +320,7 @@ export class FakeEngine implements Engine, DeveloperEngine {
 
   /** Starts queued tasks while fewer than two run. */
   private schedule(): void {
-    const tasks = [...this.records.values()].filter((r) => r.req.kind === "task");
+    const tasks = [...this.records.values()].filter((r) => r.req.kind === "task" && !r.instant);
     let running = tasks.filter((r) => r.state === "running").length;
     for (const record of tasks.sort((a, b) => a.startedAt - b.startedAt)) {
       if (running >= MAX_RUNNING_TASKS) break;
