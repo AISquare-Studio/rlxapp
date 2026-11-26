@@ -24,7 +24,8 @@ e2e = []
 
 [dependencies]
 # `unstable` provides Window::add_child, for the widgets child webview (docs/architecture.md §5.3).
-tauri = { version = "2", features = ["unstable"] }
+# `macos-proxy` gives that webview its deny-all proxy on macOS 14+ (src/widget_host/proxy.rs).
+tauri = { version = "2", features = ["unstable", "macos-proxy"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 

@@ -234,12 +234,21 @@ jobs:
           "TAURI_NATIVE_DRIVER=$driver" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           "### WebView2 $version, msedgedriver $((& $driver --version) -join ' ')" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
 
+      # RLX_PROBE_STRICT=1 makes every gate check fail the run, whatever the agent-made widgets
+      # switch says, so the widgets webview's network isolation (its deny-all proxy,
+      # src-tauri/src/widget_host/proxy.rs) must hold on Windows and Linux. macOS records its
+      # gates without failing: it never proxies loopback, so a widget's preconnect still
+      # reaches the probe's loopback listener there.
       - name: Native e2e (xvfb)
         if: runner.os == 'Linux' && hashFiles('src-tauri/Cargo.toml') != ''
+        env:
+          RLX_PROBE_STRICT: "1"
         run: xvfb-run --auto-servernum npm run e2e
 
       - name: Native e2e
         if: runner.os != 'Linux' && hashFiles('src-tauri/Cargo.toml') != ''
+        env:
+          RLX_PROBE_STRICT: ${{ runner.os == 'Windows' && '1' || '0' }}
         run: npm run e2e
 
       - name: Upload e2e screenshots and probe results

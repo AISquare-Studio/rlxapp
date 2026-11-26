@@ -20,6 +20,10 @@
 //! - **Navigation** in the widgets webview stays on the scheme ([`allow_navigation`]), and the
 //!   host CSP's frame-src holds every frame there. New windows are denied.
 //! - **WebRTC** is removed from every frame (frames.js), since CSP doesn't govern it.
+//! - **Network.** The widgets webview runs behind a deny-all proxy where the OS has a
+//!   per-webview proxy ([`proxy`], which has the OS-capability matrix), since CSP doesn't
+//!   govern preconnect either. It keeps its own data store, web context or WebView2
+//!   environment, so main's networking is untouched.
 //! - **The switch.** [`policy`] keeps agent-made widgets off on every OS until the isolation
 //!   probe passes there and the owner turns them on.
 //!
@@ -57,6 +61,7 @@
 
 pub mod action;
 pub mod commands;
+pub mod proxy;
 pub mod state;
 
 use std::collections::HashMap;
@@ -260,10 +265,10 @@ pub(crate) fn valid_id(id: &str) -> bool {
             .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
 }
 
-/// HTML sinks a built-in may not use while WebKit's preconnect still ignores CSP: a built-in
+/// HTML sinks a built-in may not use, since WebKit's preconnect ignores CSP: a built-in
 /// renders connector text (Slack, email), and markup parsed from that text could reach the
-/// network through a `<link>`. Built-ins set text with `textContent` only. Lift this once
-/// the widgets webview has a deny-all network proxy.
+/// network through a `<link>`. Built-ins set text with `textContent` only. Keep this while
+/// any OS renders built-ins without the deny-all proxy ([`proxy`]): macOS 11-13 does.
 pub const BUILTIN_HTML_SINKS: &[&str] = &[
     "innerHTML",
     "outerHTML",
@@ -546,8 +551,8 @@ fn with_preamble(html: &str) -> String {
 /// WebKit opens a connection for `<link rel=preconnect>` (and dns-prefetch, prefetch,
 /// preload) despite the widget CSP, which the isolation probe found. A widget is one
 /// self-contained file with inline JS and CSS (§5.1), so it has no use for `<link>` at all.
-/// This is defence in depth only: script can still build a link at run time, which only a
-/// deny-all network proxy for the widgets webview stops.
+/// This is defence in depth only: script can still build a link at run time, which only the
+/// deny-all proxy ([`proxy`]) stops, where the OS has one.
 pub fn inert_links(html: &str) -> String {
     let lower = html.to_ascii_lowercase();
     let mut out = String::with_capacity(html.len() + 16);
@@ -619,6 +624,9 @@ pub struct Bounds {
 pub enum AttachError {
     /// The policy says this OS has no widget webview.
     NotOnThisOs,
+    /// This OS has a per-webview proxy, but the deny-all proxy couldn't start. The widgets
+    /// webview never runs without it there.
+    Proxy(String),
     Tauri(tauri::Error),
 }
 
@@ -626,6 +634,7 @@ impl fmt::Display for AttachError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::NotOnThisOs => write!(f, "this OS has no widget webview in v0"),
+            Self::Proxy(error) => write!(f, "the widgets webview's deny-all proxy: {error}"),
             Self::Tauri(error) => write!(f, "{error}"),
         }
     }
@@ -664,21 +673,10 @@ fn add_widgets_webview<R: Runtime>(
 ) -> Result<Webview<R>, AttachError> {
     use tauri::Manager;
     let url = Url::parse(&format!("{SCHEME}://localhost/host/")).expect("static URL parses");
-    let mut builder = WebviewBuilder::new(LABEL, WebviewUrl::CustomProtocol(url));
-    // WebView2 shares one browser process per user-data folder, and refuses a second
-    // environment with other options (0x8007139F). So the widgets webview takes the main
-    // window's browser arguments, if the config sets any. Other webviews ignore them.
-    let main_args = window
-        .app_handle()
-        .config()
-        .app
-        .windows
-        .iter()
-        .find(|w| w.label == "main")
-        .and_then(|w| w.additional_browser_args.clone());
-    if let Some(args) = main_args {
-        builder = builder.additional_browser_args(&args);
-    }
+    let builder = isolate_network(
+        window,
+        WebviewBuilder::new(LABEL, WebviewUrl::CustomProtocol(url)),
+    )?;
     let builder = builder
         .on_navigation(|url| {
             let allowed = allow_navigation(url);
@@ -709,6 +707,37 @@ fn add_widgets_webview<R: Runtime>(
             LogicalSize::new(bounds.width, bounds.height),
         )
         .map_err(AttachError::Tauri)
+}
+
+/// Gives the widgets webview a network of its own: a non-persistent data store (macOS), an
+/// ephemeral web context (Linux) or its own WebView2 environment and user-data folder
+/// (Windows), none shared with main. Where this OS has a per-webview proxy, that network
+/// goes through the deny-all proxy ([`proxy`]); if the proxy can't start, there is no
+/// widgets webview. Nothing a widget stores outlives the app either.
+fn isolate_network<R: Runtime>(
+    window: &Window<R>,
+    builder: WebviewBuilder<R>,
+) -> Result<WebviewBuilder<R>, AttachError> {
+    let builder = builder.incognito(true);
+    let proxy::Support::DenyAll = proxy::support() else {
+        return Ok(builder);
+    };
+    let port = proxy::deny_all().map_err(AttachError::Proxy)?;
+    if cfg!(windows) {
+        use tauri::Manager;
+        // wry adds no proxy of its own when browser arguments are given, so they carry it.
+        let dir = window
+            .app_handle()
+            .path()
+            .app_local_data_dir()
+            .map_err(AttachError::Tauri)?
+            .join(proxy::WEBVIEW2_DATA_DIR);
+        Ok(builder
+            .data_directory(dir)
+            .additional_browser_args(&proxy::webview2_args(port)))
+    } else {
+        Ok(builder.proxy_url(proxy::url(port)))
+    }
 }
 
 #[cfg(test)]
@@ -1139,5 +1168,32 @@ mod tests {
         for url in blocked {
             assert!(!allow_navigation(&Url::parse(url).unwrap()), "{url}");
         }
+    }
+
+    /// Main's networking is unchanged by the widgets' proxy: no config gives main a proxy, an
+    /// ephemeral store or its own WebView2 folder, so it keeps the default store, context and
+    /// environment, which the widgets webview never uses (see `isolate_network`).
+    #[test]
+    fn main_keeps_its_own_network() {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        for file in ["tauri.conf.json", "tauri.e2e.conf.json"] {
+            let config = json_file(&dir.join(file));
+            let windows = config["app"]["windows"].as_array().unwrap();
+            assert!(windows.iter().any(|w| w["label"] == "main"), "{file}");
+            for window in windows {
+                for key in [
+                    "proxyUrl",
+                    "incognito",
+                    "dataDirectory",
+                    "dataStoreIdentifier",
+                ] {
+                    assert!(window.get(key).is_none(), "{file}: {key}");
+                }
+                let args = window["additionalBrowserArgs"].as_str().unwrap_or_default();
+                assert!(!args.contains("proxy"), "{file}: {args}");
+            }
+        }
+        // Tauri's default WebView2 folder for main is EBWebView.
+        assert_ne!(proxy::WEBVIEW2_DATA_DIR, "EBWebView");
     }
 }

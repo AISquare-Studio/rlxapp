@@ -22,8 +22,9 @@
 //!    `probe-host.js` probes from the host page, and `probe-widget.html` from inside the
 //!    widget iframe. Then the core reloads the webview and checks that its replay restores
 //!    the grid.
-//! 4. In main: a control call of the canary, which must be recorded, and an iframe that
-//!    main's CSP must block.
+//! 4. In main: a control call of the canary, which must be recorded, an iframe that main's
+//!    CSP must block, and a preconnect that must reach the control listener: main isn't
+//!    behind the widgets webview's deny-all proxy.
 //!
 //! The canary command `e2e_canary` is granted to the main webview only, by a runtime
 //! capability below. Any call recorded from another webview means a widget ran a command.
@@ -489,11 +490,18 @@ impl Run {
         let listener = |name: &str, l: &Listener, self_test: bool| json!({ "name": name, "port": l.port, "selfTest": self_test, "hits": l.hits() });
 
         let report = json!({
-            "schema": 3,
+            "schema": 4,
             "os": std::env::consts::OS,
             "arch": std::env::consts::ARCH,
             "elapsedMs": started.elapsed().as_millis() as u64,
             "policy": PolicyInfo::from(policy),
+            // The widgets webview's deny-all proxy: this OS's row of the matrix, its port
+            // (set once a widgets webview attached behind it) and what it refused.
+            "proxy": {
+                "support": widget_host::proxy::support().describe(),
+                "port": widget_host::proxy::running(),
+                "refused": widget_host::proxy::refused(),
+            },
             "switch": {
                 "agentRegister": agent_register,
                 "builtinRegister": builtin_register,

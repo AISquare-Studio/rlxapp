@@ -7,9 +7,10 @@ const rejected = (cmd) => ({ cmd, result: "rejected", message: `${cmd} not allow
 /** A report that passes on an OS with a widget webview and the switch off. */
 function passingReport() {
   return {
-    schema: 3,
+    schema: 4,
     os: "macos",
     policy: { widgetWebview: true, builtins: "widgets", agentWidgets: "off: off until the probe passes" },
+    proxy: { support: "deny-all", port: 4321, refused: 3 },
     switch: {
       agentRegister: "refused: agent-made widgets are off",
       builtinRegister: "registered: rlxwidget://localhost/e2e-builtin/1/",
@@ -24,7 +25,7 @@ function passingReport() {
       channels: { tauriInternals: true },
       commands: COMMANDS.map(rejected),
       raw: [{ channel: "action-route (no token)", outcome: "response 403 actions are accepted only from the host page" }],
-      connections: [],
+      connections: [{ kind: "off-machine", outcome: "added" }],
       ran: [{ frame: "e2e-builtin", id: "e2e-builtin" }],
       frames: [
         { id: "e2e-probe", sandbox: "allow-scripts" },
@@ -38,7 +39,7 @@ function passingReport() {
         sandbox: { parentDocument: "blocked: SecurityError", cookie: "blocked: SecurityError" },
         commands: [],
         raw: [{ channel: "action-route", outcome: "rejected Load failed" }],
-        connections: [],
+        connections: [{ kind: "off-machine", outcome: "added" }],
         siblingInit: { siblings: 2, answered: [] },
       },
     },
@@ -50,13 +51,19 @@ function passingReport() {
       frames: 2,
       navigation: { ack: ["http://127.0.0.1:1/widget-iframe/navigate"], violations: ["frame-src http://127.0.0.1:1"] },
     },
-    main: { canary: { result: "resolved", value: 1 }, frameSrc: "blocked: frame-src", actionRoute: "rejected Load failed", rtc: "gathering complete" },
+    main: {
+      canary: { result: "resolved", value: 1 },
+      frameSrc: "blocked: frame-src",
+      actionRoute: "rejected Load failed",
+      preconnect: "added",
+      rtc: "gathering complete",
+    },
     canary: [{ from: "main-control", webview: "main" }],
     actions: [{ widgetId: "e2e-builtin", message: { type: "refresh", v: 1 } }],
     listeners: {
       host: { selfTest: true, hits: [] },
       iframe: { selfTest: true, hits: [] },
-      control: { selfTest: true, hits: ["1 udp 20 bytes (STUN/TURN)"] },
+      control: { selfTest: true, hits: ["1 udp 20 bytes (STUN/TURN)", "2 tcp connection, no data"] },
     },
     errors: [],
   };
@@ -70,6 +77,72 @@ describe("isolation probe rules", () => {
     expect(failing(checks)).toEqual([]);
     expect(passed(checks)).toBe(true);
     expect(agentVerdict(checks).mayTurnOn).toBe(true);
+  });
+
+  it("refuses a report from another schema", () => {
+    const report = passingReport();
+    report.schema = 3;
+    expect(failing(evaluate(report))).toEqual(["report"]);
+  });
+
+  it("fails when the widgets webview isn't behind the deny-all proxy where the OS has one", () => {
+    const report = passingReport();
+    const row = () => evaluate(report).find((c) => c.id === "widgets webview runs behind the deny-all proxy");
+    expect(row().detail).toBe("127.0.0.1:4321, refused 3 connection(s)");
+    report.proxy.port = null;
+    expect(row().ok).toBe(false);
+    expect(row().detail).toBe("this OS has the proxy, but it isn't running");
+    expect(passed(evaluate(report))).toBe(false);
+  });
+
+  it("gates on off-machine preconnects reaching only the deny-all proxy", () => {
+    const id = "preconnect and dns-prefetch off the machine reach only the deny-all proxy";
+    const report = passingReport();
+    expect(evaluate(report).find((c) => c.id === id)).toMatchObject({
+      ok: true,
+      detail: "the proxy refused 3; host page attempted, widget iframe attempted",
+    });
+    // The proxy refused nothing: the attempts went past it.
+    report.proxy.refused = 0;
+    let checks = evaluate(report);
+    expect(failing(checks)).toEqual([id]);
+    expect(agentVerdict(checks).mayTurnOn).toBe(false);
+    // A side that never attempted proves nothing.
+    report.proxy.refused = 3;
+    report.host.iframe.connections = [];
+    checks = evaluate(report);
+    expect(failing(checks)).toEqual([id]);
+    expect(checks.find((c) => c.id === id).detail).toBe("the proxy refused 3; host page attempted, widget iframe didn't attempt");
+  });
+
+  it("keeps agent-made widgets off where the OS has no per-webview proxy (macOS 13), and fails in strict mode", () => {
+    const report = passingReport();
+    report.proxy = { support: "unavailable: WebKit has no per-webview proxy before macOS 14", port: null, refused: 0 };
+    const checks = evaluate(report);
+    expect(failing(checks)).toEqual([
+      "widgets webview runs behind the deny-all proxy",
+      "preconnect and dns-prefetch off the machine reach only the deny-all proxy",
+    ]);
+    expect(passed(checks)).toBe(true);
+    expect(agentVerdict(checks).mayTurnOn).toBe(false);
+    const before = process.env.RLX_PROBE_STRICT;
+    process.env.RLX_PROBE_STRICT = "1";
+    try {
+      expect(passed(evaluate(report))).toBe(false);
+      expect(passed(evaluate(passingReport()))).toBe(true);
+    } finally {
+      if (before === undefined) delete process.env.RLX_PROBE_STRICT;
+      else process.env.RLX_PROBE_STRICT = before;
+    }
+  });
+
+  it("fails when main's preconnect doesn't reach the control listener (main behind the proxy)", () => {
+    const report = passingReport();
+    const id = "main's networking unchanged: its preconnect reaches the control listener";
+    expect(evaluate(report).find((c) => c.id === id).detail).toBe("1 preconnect connection(s); main added");
+    report.listeners.control.hits = ["1 udp 20 bytes (STUN/TURN)"];
+    expect(failing(evaluate(report))).toContain(id);
+    expect(passed(evaluate(report))).toBe(false);
   });
 
   it("fails when a widget's canary call is recorded", () => {
@@ -210,9 +283,14 @@ describe("isolation probe rules", () => {
     report.webviews = ["main"];
     report.host = null;
     report.actions = [];
+    report.proxy = { support: "deny-all", port: null, refused: 0 };
+    report.listeners.control.hits = [];
     const row = evaluate(report).find((c) => c.id === "canary: 0 calls from widgets");
     expect(row.info).toBe(true);
     expect(row.detail).toBe("n/a: no widget surface on this OS");
+    // No widgets webview ran, so neither the proxy nor main's preconnect is checked.
+    expect(failing(evaluate(report))).toEqual([]);
+    expect(evaluate(report).find((c) => c.id.startsWith("main's networking")).info).toBe(true);
     report.canary.push({ from: "somewhere", webview: "widgets" });
     expect(failing(evaluate(report))).toContain("canary: 0 calls from widgets");
   });

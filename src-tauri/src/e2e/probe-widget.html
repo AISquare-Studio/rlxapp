@@ -185,6 +185,21 @@
           return "added";
         });
       }
+      // Off the machine: an external canary name (.invalid never resolves) and a TEST-NET
+      // IP. Behind the deny-all proxy they reach only the proxy, which refuses them.
+      await attempt("off-machine", () => {
+        for (const [rel, href] of [
+          ["preconnect", "http://" + FROM + ".rlx-probe-canary.invalid/preconnect"],
+          ["dns-prefetch", "http://" + FROM + "-dns.rlx-probe-canary.invalid/"],
+          ["preconnect", "http://198.51.100.7/" + FROM + "/preconnect"],
+        ]) {
+          const link = document.createElement("link");
+          link.rel = rel;
+          link.href = href;
+          document.head.append(link);
+        }
+        return "added";
+      });
       // Subresources CSP must stop: CSS url(), @import and @font-face, and SVG <image>.
       await attempt("css-url", () => {
         const div = document.createElement("div");

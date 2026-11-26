@@ -40,6 +40,12 @@ fn main() {
             }
         }
     }
+    // The widgets webview's proxy (Tauri's `macos-proxy`) calls Network.framework functions
+    // that only exist on macOS 14+. Weak links keep the app launching on macOS 11-13, where
+    // src/widget_host/proxy.rs never asks for a proxy, so they are never called.
+    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("macos") {
+        println!("cargo:rustc-link-arg=-Wl,-weak_framework,Network");
+    }
     tauri_build::try_build(
         tauri_build::Attributes::new()
             .app_manifest(tauri_build::AppManifest::new().commands(commands)),

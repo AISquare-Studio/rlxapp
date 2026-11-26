@@ -71,7 +71,7 @@ function evaluateChecks(report, stderr) {
   // as "must stay off" and the run continues.
   const gate = (id, ok, detail) => checks.push({ id, ok: Boolean(ok), gate: true, detail });
 
-  if (!report || report.schema !== 3) {
+  if (!report || report.schema !== 4) {
     check("report", false, "no report, or an unknown schema");
     return checks;
   }
@@ -134,6 +134,35 @@ function evaluateChecks(report, stderr) {
       silent.length === 0 ? "0 connections" : `${silent.length} TCP connection(s) that sent nothing: ${summarizeHits(silent)}`,
     );
   }
+  // The deny-all proxy (src-tauri/src/widget_host/proxy.rs). Where this OS has a per-webview
+  // proxy, a widgets webview without it is a bug. Where it has none (macOS 11-13), agent-made
+  // widgets must stay off there.
+  if (probed) {
+    const proxy = report.proxy ?? {};
+    const support = String(proxy.support ?? "not reported");
+    const behind = support === "deny-all" && Number.isInteger(proxy.port);
+    (support === "deny-all" ? check : gate)(
+      "widgets webview runs behind the deny-all proxy",
+      behind,
+      behind
+        ? `127.0.0.1:${proxy.port}, refused ${proxy.refused ?? 0} connection(s)`
+        : support === "deny-all"
+          ? "this OS has the proxy, but it isn't running"
+          : support,
+    );
+    // Both sides preconnect to an external canary name and a TEST-NET IP. The proxy is per
+    // webview, so one refused connection shows the webview's traffic goes there; without the
+    // proxy it refuses none, and the attempts leave the machine.
+    const offMachine = (list) => (list ?? []).some((c) => c.kind === "off-machine" && c.outcome === "added");
+    const sides = { "host page": offMachine(report.host?.connections), "widget iframe": offMachine(report.host?.iframe?.connections) };
+    const refused = Number(proxy.refused ?? 0);
+    const attempted = Object.entries(sides).map(([side, ran]) => `${side} ${ran ? "attempted" : "didn't attempt"}`).join(", ");
+    gate(
+      "preconnect and dns-prefetch off the machine reach only the deny-all proxy",
+      behind && refused >= 1 && Object.values(sides).every(Boolean),
+      `${behind ? `the proxy refused ${refused}` : `no proxy (${support})`}; ${attempted}`,
+    );
+  }
   // Frame navigation off the widget scheme is held by the host CSP's frame-src, and on
   // Windows by nothing else (wry asks the guard about top-level navigations only). So a hit
   // from the fixture's navigation step fails the run on every OS, whatever the policy: a
@@ -148,6 +177,13 @@ function evaluateChecks(report, stderr) {
   }
   const controlHits = listeners.control?.hits ?? [];
   info("listener control (main WebRTC)", `${main.rtc ?? "not run"}; control listener saw ${controlHits.length}`);
+  // Main isn't behind the widgets webview's proxy: CSP doesn't govern preconnect, so main's
+  // must reach the control listener. Where no widgets webview ran, there is no proxy to check.
+  const mainPreconnects = controlHits.map(classifyHit).filter((h) => h.vector === "preconnect").length;
+  const mainNetwork = "main's networking unchanged: its preconnect reaches the control listener";
+  const mainDetail = `${mainPreconnects} preconnect connection(s); main ${main.preconnect ?? "added none"}`;
+  if (probed) check(mainNetwork, mainPreconnects >= 1, mainDetail);
+  else info(mainNetwork, `${mainDetail} (no widgets webview, so no proxy here)`);
   check("main CSP blocks frames", String(main.frameSrc ?? "").startsWith("blocked"), String(main.frameSrc));
 
   // The per-OS switch, through the product API.

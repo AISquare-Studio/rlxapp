@@ -1,7 +1,7 @@
 // Isolation probe, main-webview controls (test builds only; see src/e2e/mod.rs). The core
 // evaluates this in main once it has loaded, then reads window.__rlxMainProbe.
 (async () => {
-  const out = { canary: null, frameSrc: null, actionRoute: null, rtc: null, done: false };
+  const out = { canary: null, frameSrc: null, actionRoute: null, preconnect: null, rtc: null, done: false };
   window.__rlxMainProbe = out;
   const errorText = (error) => (error && (error.message || error.name)) || String(error);
 
@@ -43,6 +43,14 @@
   } catch (error) {
     out.actionRoute = `rejected ${errorText(error)}`;
   }
+
+  // Main's networking is unchanged by the widgets webview's deny-all proxy: CSP doesn't
+  // govern preconnect, so main's must still reach the control listener.
+  const link = document.createElement("link");
+  link.rel = "preconnect";
+  link.href = "http://127.0.0.1:__RLX_CONTROL_PORT__/main/preconnect";
+  document.head.append(link);
+  out.preconnect = "added";
 
   // Control for the listener: CSP doesn't govern WebRTC, so where main has RTCPeerConnection
   // its STUN requests should reach the control listener. That shows the probe listener would
