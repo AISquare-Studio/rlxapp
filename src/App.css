@@ -1405,10 +1405,10 @@ input[type="color"] {
 }
 
 .onboarding__mark {
+  display: block;
   width: 84px;
   height: auto;
   color: var(--rlx-mark);
-  margin-bottom: var(--rlx-space-3);
 }
 
 .sign-off-preview {

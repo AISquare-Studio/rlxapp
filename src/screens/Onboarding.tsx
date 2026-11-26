@@ -25,6 +25,9 @@ export function Onboarding({ claudeMock }: OnboardingProps) {
 
   return (
     <div className="onboarding">
+      <header className="onboarding__header">
+        <RlxMark className="onboarding__mark" />
+      </header>
       <ol className="steps" aria-label="Setup steps">
         {STEPS.map((label, i) => (
           <li key={label} className={i === step ? "is-current" : i < step ? "is-done" : ""} aria-current={i === step ? "step" : undefined}>
@@ -35,7 +38,6 @@ export function Onboarding({ claudeMock }: OnboardingProps) {
       <div className="onboarding__card">
         {step === 0 ? (
           <section aria-label="Welcome">
-            <RlxMark className="onboarding__mark" />
             <h1>Welcome to rlx</h1>
             <p>
               rlx runs an AI agent for you in the background. It watches Slack and Gmail, keeps your dashboard up to date, and
