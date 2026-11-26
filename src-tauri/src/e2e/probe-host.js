@@ -254,6 +254,18 @@
     report,
     /** The last step: every navigation the page and the fixture can try. */
     navigate() {
+      // The navigation step's evidence: the fixture's ack, and every frame-src violation
+      // this page sees (the fixture's self-navigation is blocked as a violation here).
+      report.navigation = { ack: null, violations: [] };
+      document.addEventListener("securitypolicyviolation", (event) => {
+        report.navigation.violations.push(`${event.effectiveDirective} ${event.blockedURI}`);
+      });
+      window.addEventListener("message", (event) => {
+        const fixtureFrame = [...document.querySelectorAll("iframe")].find((f) => f.dataset.widgetId === CONFIG.fixture);
+        if (fixtureFrame && event.source === fixtureFrame.contentWindow && event.data && event.data.type === "e2e-navigating") {
+          report.navigation.ack = Array.isArray(event.data.urls) ? event.data.urls.map(String) : [];
+        }
+      });
       const fixture = [...document.querySelectorAll("iframe")].find((f) => f.dataset.widgetId === CONFIG.fixture);
       if (fixture && fixture.contentWindow) fixture.contentWindow.postMessage({ type: "e2e-navigate" }, "*");
       setTimeout(() => {

@@ -460,7 +460,7 @@ impl Run {
             // Navigation goes last: if it isn't blocked, the page is gone.
             let _ = widgets.eval("window.__rlxProbe.navigate()");
             thread::sleep(Duration::from_secs(5));
-            let after = "JSON.stringify({ href: location.href, frames: document.querySelectorAll('iframe').length })";
+            let after = "JSON.stringify({ href: location.href, frames: document.querySelectorAll('iframe').length, navigation: window.__rlxProbe ? window.__rlxProbe.report.navigation : null })";
             host_after_nav = eval_value(widgets, after, Duration::from_secs(5))
                 .and_then(|v| v.as_str().and_then(|s| serde_json::from_str(s).ok()))
                 .unwrap_or(Value::Null);

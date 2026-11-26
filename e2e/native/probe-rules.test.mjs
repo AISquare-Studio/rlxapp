@@ -45,7 +45,11 @@ function passingReport() {
     mount: { ok: true, ids: ["e2e-probe", "e2e-builtin"] },
     reload: { loadsBefore: 1, loadsAfter: 2, frames: ["e2e-probe", "e2e-builtin"] },
     framesBeforeNavigation: 2,
-    hostAfterNavigation: { href: "rlxwidget://localhost/host/", frames: 2 },
+    hostAfterNavigation: {
+      href: "rlxwidget://localhost/host/",
+      frames: 2,
+      navigation: { ack: ["http://127.0.0.1:1/widget-iframe/navigate"], violations: ["frame-src http://127.0.0.1:1"] },
+    },
     main: { canary: { result: "resolved", value: 1 }, frameSrc: "blocked: frame-src", actionRoute: "rejected Load failed", rtc: "gathering complete" },
     canary: [{ from: "main-control", webview: "main" }],
     actions: [{ widgetId: "e2e-builtin", message: { type: "refresh", v: 1 } }],
@@ -139,7 +143,28 @@ describe("isolation probe rules", () => {
   it("fails when the host page navigated away", () => {
     const report = passingReport();
     report.hostAfterNavigation = null;
-    expect(failing(evaluate(report))).toContain("self-navigation off the widget scheme blocked");
+    expect(failing(evaluate(report))).toContain("host page stays on the widget scheme after navigating");
+  });
+
+  it("fails hard on any frame navigation request, on every OS and policy", () => {
+    for (const vector of ["navigate", "ping-target", "meta-refresh"]) {
+      const report = passingReport();
+      // Windows-like: a webview only the probe attached, where connection leaks are gates.
+      report.policy = { widgetWebview: false, builtins: "main", agentWidgets: "off: no widget webview in v0" };
+      report.switch.attach = "refused: this OS has no widget webview in v0";
+      report.switch.builtinRegister = "refused: this OS has no widget webview in v0";
+      report.switch.probeAttach = "attached for the probe only";
+      report.listeners.iframe.hits = [`1 tcp GET /widget-iframe/${vector} HTTP/1.1`];
+      const checks = evaluate(report);
+      expect(passed(checks)).toBe(false);
+      expect(failing(checks)).toContain("widget frame can't navigate off the widget scheme (navigate, link, meta refresh, top, popup, form)");
+    }
+  });
+
+  it("fails when the fixture's navigation step never ran", () => {
+    const report = passingReport();
+    report.hostAfterNavigation.navigation = { ack: null, violations: [] };
+    expect(failing(evaluate(report))).toContain("the fixture's navigation step ran (positive control)");
   });
 
   it("checks the switch on an OS without a widget webview", () => {

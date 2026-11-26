@@ -2,11 +2,16 @@
 # macOS native checks of the built rlx app: window, second launch, app menu, no tray or
 # login item, close, reopen and quit.
 #
-#   scripts/mac-native-check.sh [--no-build] [--install] [--no-probe] [--skip CHECK]...
+#   scripts/mac-native-check.sh [--no-build] [--install] [--no-probe] [--dry-run] [--skip CHECK]...
 #
 # macOS has no WebDriver for WKWebView, so this drives the real app with osascript and
 # captures ONLY the app's own windows with `screencapture -l <windowid>`. It never takes a
 # full-screen capture and never builds a DMG (building one opens Finder windows).
+#
+# It never touches a running rlx. If any rlx is running (found by bundle id through lsappinfo,
+# or as any process inside an rlx.app bundle), it refuses and exits 2 before it builds,
+# installs or launches anything. --dry-run runs only that check, prints the plan, and exits.
+# RLX_INSTALL_DIR overrides /Applications for --install, for the script's own test.
 #
 # What it does:
 #   1. builds the app: `npm run tauri build -- --bundles app` (skip with --no-build). With
@@ -47,14 +52,16 @@ JXA="$ROOT/scripts/lib/mac-windows.js"
 build=1
 install=0
 probe=1
+dry_run=0
 skips=" "
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --no-build) build=0 ;;
     --install) install=1 ;;
     --no-probe) probe=0 ;;
+    --dry-run) dry_run=1 ;;
     --skip) skips+="$2 "; shift ;;
-    -h|--help) sed -n '2,32p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help) sed -n '2,40p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) echo "unknown option: $1 (see --help)" >&2; exit 2 ;;
   esac
   shift
@@ -63,6 +70,36 @@ done
 if [[ "$(uname -s)" != Darwin ]]; then
   echo "mac-native-check: macOS only. Windows and Linux run 'npm run e2e' under tauri-driver." >&2
   exit 2
+fi
+
+INSTALL_DIR=${RLX_INSTALL_DIR:-/Applications}
+
+# Any running rlx: by bundle id, or any process from inside an rlx.app bundle (the build
+# directory's, /Applications', or another copy). Prints what it found.
+running_rlx() {
+  local asn procs
+  asn=$(lsappinfo find bundleID=studio.aisquare.rlx 2>/dev/null || true)
+  procs=$(pgrep -fl '/rlx\.app/Contents/MacOS/' 2>/dev/null || true)
+  echo "$asn $procs" | tr '\n' ' ' | sed -E 's/  +/ /g; s/^ //; s/ $//'
+}
+refuse_if_running() {
+  local found
+  found=$(running_rlx)
+  if [[ -n "$found" ]]; then
+    echo "mac-native-check: rlx is running ($found)." >&2
+    echo "Quit it first. This script never replaces, launches next to, or drives a running rlx." >&2
+    exit 2
+  fi
+}
+
+# --- Before anything: never touch a running rlx ------------------------------------
+refuse_if_running
+if [[ $dry_run -eq 1 ]]; then
+  echo "dry run: no rlx is running"
+  if [[ $build -eq 1 ]]; then echo "dry run: would build rlx.app (npm run tauri build -- --bundles app)"; fi
+  if [[ $install -eq 1 ]]; then echo "dry run: would replace $INSTALL_DIR/rlx.app with the build"; fi
+  echo "dry run: would launch rlx and run the checks; nothing was done"
+  exit 0
 fi
 
 failures=0
@@ -122,10 +159,12 @@ if [[ $build -eq 1 ]]; then
 fi
 [[ -d "$APP_BUNDLE" ]] || { echo "no app at $APP_BUNDLE; drop --no-build" >&2; exit 2; }
 if [[ $install -eq 1 ]]; then
-  rm -rf /Applications/rlx.app
-  cp -R "$APP_BUNDLE" /Applications/rlx.app
-  APP_BUNDLE=/Applications/rlx.app
-  info "installed to /Applications/rlx.app"
+  # Again right before replacing anything: rlx may have started during the build.
+  refuse_if_running
+  rm -rf "$INSTALL_DIR/rlx.app"
+  cp -R "$APP_BUNDLE" "$INSTALL_DIR/rlx.app"
+  APP_BUNDLE="$INSTALL_DIR/rlx.app"
+  info "installed to $INSTALL_DIR/rlx.app"
 fi
 mkdir -p "$SHOTS"
 

@@ -267,6 +267,9 @@
 
     function navigate() {
       const tag = (kind) => LISTENER + "/" + FROM + "/" + kind;
+      // Positive control: tell the host this step really runs, so a fixture that stops
+      // navigating can't pass the "blocked" checks by doing nothing.
+      window.parent.postMessage({ type: "e2e-navigating", urls: [tag("ping-target"), tag("meta-refresh"), tag("navigate")] }, "*");
       // A hyperlink ping and a meta refresh: both must reach nothing.
       try {
         const link = document.createElement("a");

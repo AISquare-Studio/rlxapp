@@ -7,6 +7,9 @@
 // What must hold is that nothing they carry runs: every command is rejected (by the missing
 // key or the ACL), and the canary records no call from a widget.
 
+/** The fixture's navigation step's request paths: any hit is a frame leaving the scheme. */
+const FRAME_NAVIGATION = new Set(["navigate", "ping-target", "meta-refresh", "top-navigation", "window-open", "form"]);
+
 /** Tauri's message when it drops an IPC message with the wrong key (tauri webview/mod.rs). */
 const KEY_DROP = /__TAURI_INVOKE_KEY__ expected (\S+) but received (\S+)/;
 
@@ -123,6 +126,18 @@ function evaluateChecks(report, stderr) {
       `${label}: 0 preconnect/dns-prefetch connections`,
       silent.length === 0,
       silent.length === 0 ? "0 connections" : `${silent.length} TCP connection(s) that sent nothing: ${summarizeHits(silent)}`,
+    );
+  }
+  // Frame navigation off the widget scheme is held by the host CSP's frame-src, and on
+  // Windows by nothing else (wry asks the guard about top-level navigations only). So a hit
+  // from the fixture's navigation step fails the run on every OS, whatever the policy: a
+  // frame-src regression must turn CI red.
+  if (probed) {
+    const frameNavigation = (listeners.iframe?.hits ?? []).map(classifyHit).filter((h) => FRAME_NAVIGATION.has(h.vector));
+    check(
+      "widget frame can't navigate off the widget scheme (navigate, link, meta refresh, top, popup, form)",
+      frameNavigation.length === 0,
+      frameNavigation.length === 0 ? "0 requests" : summarizeHits(frameNavigation),
     );
   }
   const controlHits = listeners.control?.hits ?? [];
@@ -288,10 +303,24 @@ function evaluateChecks(report, stderr) {
   );
 
   const after = report.hostAfterNavigation;
+  // Positive control: the fixture's navigation step must have run, or "0 requests" proves
+  // nothing.
+  const navigation = after?.navigation ?? null;
+  check(
+    "the fixture's navigation step ran (positive control)",
+    Array.isArray(navigation?.ack),
+    Array.isArray(navigation?.ack) ? `ack for ${navigation.ack.length} navigation(s)` : "no ack from the fixture",
+  );
+  info(
+    "CSP violations the host page saw during navigation",
+    (navigation?.violations ?? []).join("; ") || "none reported",
+  );
   (policy.widgetWebview ? check : gate)(
-    "self-navigation off the widget scheme blocked",
+    "host page stays on the widget scheme after navigating",
     after && typeof after.href === "string" && after.href === host.href && after.frames === report.framesBeforeNavigation,
-    after ? `host still at ${after.href}, ${after.frames} frames` : "host page gone after navigating",
+    after
+      ? `host still at ${after.href}, ${after.frames} frames (whether a request still went out is the host page's connection check)`
+      : "host page gone after navigating",
   );
   return checks;
 }
