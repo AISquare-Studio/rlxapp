@@ -89,7 +89,9 @@ describe("Agents section", () => {
     expect(within(slack).getByText("Asleep")).toBeTruthy();
     expect(within(slack).getByText("Silent")).toBeTruthy();
     expect(within(slack).getByText(/Fetched, nothing new, no Claude usage/)).toBeTruthy();
-    expect(within(slack).getByText("no Claude usage")).toBeTruthy();
+    // The outcome already says it: no chip repeating "no Claude usage" (ui-tester #1752, item 6).
+    expect(within(slack).queryByText("no Claude usage")).toBeNull();
+    expect(within(screen.getByTestId("agent-row-meetings-agent")).getByText("model turn")).toBeTruthy();
 
     pick("More actions for Meetings agent", "Pause", meetings);
     expect(within(meetings).getByText("Paused")).toBeTruthy();
@@ -199,7 +201,8 @@ describe("Start of day", () => {
     const drafts = within(messages).getAllByTestId("email-draft-card");
     const reply = drafts[drafts.length - 1]!;
     expect(within(reply).getByText("To Aiko Tanaka")).toBeTruthy();
-    expect(within(reply).getByText(/I'm free Tuesday at 11:00/)).toBeTruthy();
+    // A free-text answer reads as its own sentence in the reply (ui-tester #1752, item 5).
+    expect(within(reply).getByText("Thanks Aiko! Ravi, great to meet you. Tuesday at 11:00. Let me know what works for you.")).toBeTruthy();
   });
 
   it("signs every draft as the personal agent, never as the helper agent that drafted it", async () => {
@@ -216,7 +219,7 @@ describe("Start of day", () => {
     expect(within(draft).getByTestId("sign-off").textContent).toBe(expected);
 
     const ask = within(messages).getByTestId("needs-context-card");
-    fireEvent.click(within(ask).getByRole("button", { name: "Thursday afternoon" }));
+    fireEvent.click(within(ask).getByRole("button", { name: "Thursday afternoon works for me" }));
     const reply = within(messages).getAllByTestId("email-draft-card").at(-1)!;
     expect(within(reply).getByText("To Aiko Tanaka")).toBeTruthy();
     expect(within(reply).getByTestId("sign-off").textContent).toBe(expected);

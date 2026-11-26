@@ -150,7 +150,7 @@ function RunDetail({ runId }: { runId: string }) {
               {event.type === "tool_result" ? `Result from ${event.tool}` : null}
               {event.type === "rate_limited" ? "Rate limited; waiting" : null}
               {event.type === "question" ? `Asked: ${event.text}` : null}
-              {event.type === "finished" ? `Finished: ${event.status}${event.reason ? ` (${event.reason})` : ""}` : null}
+              {event.type === "finished" ? `Finished: ${event.status}${event.reason && event.reason !== event.status ? ` (${event.reason})` : ""}` : null}
             </span>
           </li>
         ))}

@@ -203,7 +203,8 @@ export function Settings({ osDark }: { osDark: boolean }) {
           <span className="switch__track" aria-hidden="true" />
           Developer mode: show raw runs and logs, and Fleet, Board and Panes for your rlx projects
         </label>
-        <EngineHomeField />
+        {/* Technical detail: only in Developer mode. */}
+        {s.devMode ? <EngineHomeField /> : null}
       </section>
 
       <section className="settings__section" id="about" aria-labelledby="about-title">

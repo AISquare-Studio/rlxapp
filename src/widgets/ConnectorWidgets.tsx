@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import type { Feed, GmailDashboard } from "../engine/fake/data.ts";
 import { useEngineData, useNow } from "../engine/hooks.ts";
 import { useApp } from "../state/context.ts";
@@ -143,6 +143,27 @@ export function SlackDigestWidget({ settingsOpen }: { settingsOpen: boolean }) {
   );
 }
 
+/**
+ * One Gmail section, calm: its header, a count and one line, with the items behind a fold.
+ * Inside, each item is one line; its snippet, time and action appear on hover or keyboard focus.
+ */
+function GmailSection({ title, count, line, open, children }: { title: string; count: number; line: string; open?: boolean; children: ReactNode }) {
+  return (
+    <section className="gmail__section" aria-label={title}>
+      <details className="gmail__fold" open={open ? true : undefined}>
+        <summary>
+          <h4>{title}</h4>
+          <span className="gmail__count" aria-label={`${count} item${count === 1 ? "" : "s"}`}>
+            {count}
+          </span>
+          <span className="gmail__line muted">{line}</span>
+        </summary>
+        <div className="gmail__items">{children}</div>
+      </details>
+    </section>
+  );
+}
+
 export function GmailWidget({ settingsOpen }: { settingsOpen: boolean }) {
   const { state, updateSettings } = useApp();
   const { data } = useEngineData<GmailDashboard>(
@@ -155,49 +176,53 @@ export function GmailWidget({ settingsOpen }: { settingsOpen: boolean }) {
   const [newSender, setNewSender] = useState("");
   if (!data) return <p className="muted">Checking Gmail…</p>;
   const keySenders = state.settings.keySenders;
+  const names = (list: { from: string }[]) => list.map((m) => m.from).join(", ") || "Nothing waiting";
+  const next = data.meetings[0];
   return (
     <div className="gmail">
-      <section className="gmail__section" aria-label="Needs a reply">
-        <h4>Needs a reply</h4>
+      <GmailSection title="Needs a reply" count={data.needsReply.length} line={names(data.needsReply)}>
         {data.needsReply.map((m) => (
           <div key={m.id} className="mail reveal-host" tabIndex={0}>
-            <div className="mail__head">
-              <strong>{m.from}</strong> <span className="muted reveal">{m.time}</span>
+            <div className="mail__line">
+              <strong>{m.from}</strong> <span className="muted">{m.subject}</span>
             </div>
-            <div className="mail__subject">{m.subject}</div>
-            <div className="mail__snippet muted">{m.snippet}</div>
-            <button
-              type="button"
-              className="button button--sm"
-              onClick={() =>
-                createDraft({
-                  origin: "widget",
-                  connector: "claude.ai Gmail",
-                  destination: m.from,
-                  subject: `Re: ${m.subject}`,
-                  body: `Hi ${m.from.split(" ")[0]}, thanks for this. I'll review it today and come back to you.`,
-                  context: `Reply to “${m.subject}”`,
-                })
-              }
-            >
-              Draft reply
-            </button>
+            <div className="reveal-block mail__more">
+              <p className="muted">
+                {m.snippet} <span className="mail__time">· {m.time}</span>
+              </p>
+              <button
+                type="button"
+                className="button button--sm"
+                onClick={() =>
+                  createDraft({
+                    origin: "widget",
+                    connector: "claude.ai Gmail",
+                    destination: m.from,
+                    subject: `Re: ${m.subject}`,
+                    body: `Hi ${m.from.split(" ")[0]}, thanks for this. I'll review it today and come back to you.`,
+                    context: `Reply to “${m.subject}”`,
+                  })
+                }
+              >
+                Draft reply
+              </button>
+            </div>
           </div>
         ))}
-      </section>
-      <section className="gmail__section" aria-label="Important unread">
-        <h4>Important unread</h4>
+      </GmailSection>
+      <GmailSection title="Important unread" count={data.importantUnread.length} line={names(data.importantUnread)}>
         {data.importantUnread.map((m) => (
           <div key={m.id} className="mail reveal-host" tabIndex={0}>
-            <div className="mail__head">
-              <strong>{m.from}</strong> <span className="muted reveal">{m.time}</span>
+            <div className="mail__line">
+              <strong>{m.from}</strong> <span className="muted">{m.subject}</span>
             </div>
-            <div className="mail__subject">{m.subject}</div>
+            <div className="reveal-block mail__more">
+              <p className="muted mail__time">{m.time}</p>
+            </div>
           </div>
         ))}
-      </section>
-      <section className="gmail__section" aria-label="Key senders">
-        <h4>Key senders</h4>
+      </GmailSection>
+      <GmailSection title="Key senders" count={keySenders.length} line={keySenders.join(", ") || "None yet"} open={settingsOpen}>
         <ul className="chips">
           {keySenders.map((sender) => {
             const latest = data.keySenders.find((k) => k.sender === sender)?.latest;
@@ -205,7 +230,7 @@ export function GmailWidget({ settingsOpen }: { settingsOpen: boolean }) {
               <li key={sender} className="chip">
                 <span>
                   {sender}
-                  {latest ? <span className="muted"> · {latest.subject}</span> : <span className="muted"> · nothing new</span>}
+                  <span className="muted"> · {latest ? latest.subject : "nothing new"}</span>
                 </span>
                 {settingsOpen ? (
                   <button
@@ -237,45 +262,44 @@ export function GmailWidget({ settingsOpen }: { settingsOpen: boolean }) {
             </button>
           </form>
         ) : null}
-      </section>
-      <section className="gmail__section" aria-label="Daily digest">
-        <h4>Daily digest</h4>
-        <p className="muted">{data.digest.summary}</p>
+      </GmailSection>
+      <GmailSection title="Daily digest" count={data.digest.drafts.length} line={data.digest.summary}>
         {data.digest.drafts.map((d) => (
-          <div key={d.id} className="mail mail--draft">
-            <div className="mail__head">
-              <strong>To {d.to}</strong> <span className="badge">Drafted reply</span>
+          <div key={d.id} className="mail reveal-host" tabIndex={0}>
+            <div className="mail__line">
+              <strong>To {d.to}</strong> <span className="muted">{d.subject}</span>
             </div>
-            <div className="mail__snippet">{d.body}</div>
-            <button
-              type="button"
-              className="button button--sm"
-              onClick={() =>
-                createDraft({
-                  origin: "dataJob",
-                  connector: "claude.ai Gmail",
-                  destination: d.to,
-                  subject: d.subject,
-                  body: d.body,
-                  context: "From your daily digest",
-                })
-              }
-            >
-              Review draft
-            </button>
+            <div className="reveal-block mail__more">
+              <p className="muted">{d.body}</p>
+              <button
+                type="button"
+                className="button button--sm"
+                onClick={() =>
+                  createDraft({
+                    origin: "dataJob",
+                    connector: "claude.ai Gmail",
+                    destination: d.to,
+                    subject: d.subject,
+                    body: d.body,
+                    context: "From your daily digest",
+                  })
+                }
+              >
+                Review draft
+              </button>
+            </div>
           </div>
         ))}
-      </section>
-      <section className="gmail__section" aria-label="Today's meetings">
-        <h4>Today's meetings</h4>
+      </GmailSection>
+      <GmailSection title="Today's meetings" count={data.meetings.length} line={next ? `Next: ${next.time} ${next.title}` : "No meetings"}>
         <ul className="meetings">
           {data.meetings.map((m) => (
-            <li key={m.id}>
-              <span className="meetings__time">{m.time}</span> {m.title} <span className="muted">· {m.with}</span>
+            <li key={m.id} className="reveal-host" tabIndex={0}>
+              <span className="meetings__time">{m.time}</span> {m.title} <span className="muted reveal">· {m.with}</span>
             </li>
           ))}
         </ul>
-      </section>
+      </GmailSection>
     </div>
   );
 }

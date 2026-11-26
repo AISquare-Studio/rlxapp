@@ -595,6 +595,13 @@ input[type="color"] {
   cursor: pointer;
 }
 
+/* A settings switch is its own row, with the grid's gap before whatever follows. */
+.settings__section > .switch {
+  display: flex;
+  width: fit-content;
+  margin-bottom: var(--rlx-space-4);
+}
+
 .switch input {
   position: absolute;
   opacity: 0;
@@ -794,15 +801,76 @@ input[type="color"] {
   color: inherit;
 }
 
+/* Gmail, calm: five one-line sections (header, count, a line), each folding open in place. */
 .gmail {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: var(--rlx-space-3);
+  display: flex;
+  flex-direction: column;
+  gap: var(--rlx-space-1);
 }
 
-.gmail__section h4 {
-  margin: 0 0 var(--rlx-space-2);
+.gmail__fold > summary {
+  display: flex;
+  align-items: baseline;
+  gap: var(--rlx-space-2);
+  min-width: 0;
+  padding: var(--rlx-space-1) 0;
+  cursor: pointer;
+}
+
+.gmail__fold > summary h4 {
+  flex: none;
+  margin: 0;
   font-size: var(--rlx-text-sm);
+}
+
+.gmail__count {
+  flex: none;
+  font-size: var(--rlx-text-sm);
+  color: var(--rlx-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.gmail__line {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--rlx-text-sm);
+}
+
+.gmail__items {
+  display: flex;
+  flex-direction: column;
+  gap: var(--rlx-space-1);
+  padding: var(--rlx-space-1) 0 var(--rlx-space-2) var(--rlx-space-4);
+}
+
+.mail__line {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mail__more p {
+  margin: var(--rlx-space-1) 0 var(--rlx-space-2);
+  font-size: var(--rlx-text-sm);
+}
+
+/* Shown on hover or keyboard focus of its item, taking space only then. */
+.reveal-block {
+  display: none;
+}
+
+.reveal-host:hover > .reveal-block,
+.reveal-host:focus-within > .reveal-block {
+  display: block;
+}
+
+@media (hover: none) {
+  .reveal-block {
+    display: block;
+  }
 }
 
 /* Mail sits on the widget itself, like feed items: no card inside the card. */
@@ -815,22 +883,6 @@ input[type="color"] {
 .mail:hover,
 .mail:focus-within {
   background: var(--rlx-hover-bg);
-}
-
-.mail__head {
-  display: flex;
-  justify-content: space-between;
-  gap: var(--rlx-space-2);
-}
-
-.mail__subject {
-  font-weight: 600;
-  margin: var(--rlx-space-1) 0;
-}
-
-.mail__snippet {
-  font-size: var(--rlx-text-sm);
-  margin-bottom: var(--rlx-space-2);
 }
 
 .chips {
@@ -954,7 +1006,15 @@ input[type="color"] {
   height: 170px;
   border: 0;
   background: transparent;
-  color-scheme: normal;
+}
+
+/* The frame's scheme matches its document's (see withColorScheme), so its canvas stays clear. */
+.agent-frame[data-scheme="dark"] {
+  color-scheme: dark;
+}
+
+.agent-frame[data-scheme="light"] {
+  color-scheme: light;
 }
 
 .ask-card {

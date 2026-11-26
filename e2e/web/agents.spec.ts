@@ -64,8 +64,10 @@ test("C, D, E: create Start of day with the manager, Simulate 9:00, then the dra
   await expect(draft).toContainText("Sent");
 
   const ask = messages.getByTestId("needs-context-card");
-  await ask.getByRole("button", { name: "Tuesday 11:00 or Wednesday 15:00" }).click();
-  await expect(messages.getByTestId("email-draft-card").last()).toContainText("I'm free Tuesday 11:00 or Wednesday 15:00");
+  await ask.getByRole("button", { name: "I'm free Tuesday at 11:00 or Wednesday at 15:00" }).click();
+  await expect(messages.getByTestId("email-draft-card").last()).toContainText(
+    "Ravi, great to meet you. I'm free Tuesday at 11:00 or Wednesday at 15:00. Let me know what works for you.",
+  );
 });
 
 test("F: the Slack widget refreshes silently with no model turn, and takes one when something is new", async ({ page }) => {

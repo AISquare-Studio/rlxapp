@@ -27,10 +27,13 @@ export function ModeChip({ agent }: { agent: Agent }) {
 
 export function LastRun({ agent, now }: { agent: Agent; now: number }) {
   if (!agent.lastRun) return <span className="muted">Hasn't run yet</span>;
+  const { outcome, modelTurn } = agent.lastRun;
+  // The chip says whether Claude was used, unless the outcome already says so.
+  const saysSo = /claude/i.test(outcome);
   return (
     <span className="last-run">
-      <span className="muted">{ago(now, agent.lastRun.at)}:</span> {agent.lastRun.outcome}
-      <span className={`turn-chip${agent.lastRun.modelTurn ? " turn-chip--model" : ""}`}>{agent.lastRun.modelTurn ? "model turn" : "no Claude usage"}</span>
+      <span className="muted">{ago(now, agent.lastRun.at)}:</span> {outcome}
+      {saysSo ? null : <span className={`turn-chip${modelTurn ? " turn-chip--model" : ""}`}>{modelTurn ? "model turn" : "no Claude usage"}</span>}
     </span>
   );
 }

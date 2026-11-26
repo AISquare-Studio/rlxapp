@@ -60,7 +60,7 @@ for (const theme of ["dark", "light"] as const) {
     await shot(page, `${label}-12-start-of-day-channel`);
     await page.getByTestId("needs-context-card").scrollIntoViewIfNeeded();
     await shot(page, `${label}-13-draft-and-needs-context`);
-    await page.getByTestId("needs-context-card").getByRole("button", { name: "Tuesday 11:00 or Wednesday 15:00" }).click();
+    await page.getByTestId("needs-context-card").getByRole("button", { name: "I'm free Tuesday at 11:00 or Wednesday at 15:00" }).click();
     await page.waitForTimeout(300);
     await shot(page, `${label}-14-needs-context-answered`);
 
@@ -110,5 +110,21 @@ for (const theme of ["dark", "light"] as const) {
     await page.getByRole("button", { name: "About rlx" }).click();
     await page.waitForTimeout(300);
     await shot(page, `${label}-27-about`);
+    await page.keyboard.press("Escape");
+
+    await nav.getByRole("button", { name: "Dashboard" }).click();
+    const tile = page.getByRole("region", { name: "Open pull requests" });
+    await page.frameLocator('iframe[title="Open pull requests"]').locator(".row").first().waitFor();
+    await page.waitForTimeout(300);
+    // The tile itself (an element shot scrolls it into view): the frame must show the theme through it.
+    await tile.screenshot({ path: `docs/gallery/${label}-28-agent-widget-tile.png` });
+  });
+
+  test(`settings with Developer mode off in ${label}`, async ({ page }) => {
+    await openShell(page, { theme, devMode: false });
+    await page.getByRole("navigation", { name: "Navigation" }).getByRole("button", { name: "Settings" }).click();
+    await page.locator("#service").scrollIntoViewIfNeeded();
+    await page.waitForTimeout(300);
+    await shot(page, `${label}-29-settings-service-developer-off`);
   });
 }

@@ -6,6 +6,7 @@ import type { WidgetBounds } from "../platform/widgetHost.ts";
 import { useApp } from "../state/context.ts";
 import { Modal } from "../ui/Modal.tsx";
 import { tokensFor } from "../theme/tokensFor.ts";
+import { withColorScheme } from "./colorScheme.ts";
 import { useOsDark } from "../theme/useOsDark.ts";
 
 /**
@@ -34,6 +35,7 @@ export function AgentFrame({ id, version, title, html, data }: AgentFrameProps) 
   const osDark = useOsDark();
   const { family, mode, accent } = state.settings;
   const tokens = useMemo(() => tokensFor({ family, mode, accent }, osDark), [family, mode, accent, osDark]);
+  const scheme = tokens["color-scheme"] === "light" ? "light" : "dark";
   const tokensRef = useRef(tokens);
 
   useEffect(() => {
@@ -107,7 +109,8 @@ export function AgentFrame({ id, version, title, html, data }: AgentFrameProps) 
       referrerPolicy="no-referrer"
       data-testid="agent-widget-frame"
       onLoad={onLoad}
-        srcDoc={source.srcdoc}
+        data-scheme={scheme}
+        srcDoc={withColorScheme(source.srcdoc, scheme)}
       />
     </div>
   );

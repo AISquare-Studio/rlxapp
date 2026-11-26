@@ -8,6 +8,7 @@ import { WidgetHost } from "../platform/widgetHost.ts";
 import { AppProvider } from "../state/AppProvider.tsx";
 import { DEFAULT_SETTINGS } from "../state/model.ts";
 import { AgentFrame, AGENT_WIDGET_SANDBOX } from "./AgentWidget.tsx";
+import { withColorScheme } from "./colorScheme.ts";
 import { GmailWidget, SlackDigestWidget } from "./ConnectorWidgets.tsx";
 import { ClockWidget, PomodoroWidget, TimerWidget } from "./TimeWidgets.tsx";
 
@@ -96,11 +97,22 @@ describe("Slack digest", () => {
 });
 
 describe("Gmail dashboard", () => {
-  it("shows all five sections", async () => {
+  it("shows all five sections, each as one calm line: its header, a count and a summary", async () => {
     wrap(<GmailWidget settingsOpen={false} />);
-    for (const section of ["Needs a reply", "Important unread", "Key senders", "Daily digest", "Today's meetings"]) {
-      expect(await screen.findByRole("region", { name: section })).toBeTruthy();
+    for (const [section, count] of [
+      ["Needs a reply", "2"],
+      ["Important unread", "2"],
+      ["Key senders", "3"],
+      ["Daily digest", "2"],
+      ["Today's meetings", "3"],
+    ] as const) {
+      const region = await screen.findByRole("region", { name: section });
+      expect(within(region).getByRole("heading", { level: 4, name: section })).toBeTruthy();
+      expect(region.querySelector(".gmail__count")?.textContent).toBe(count);
+      expect(region.querySelector("details")?.open).toBe(false);
     }
+    // No 'Drafted reply' chip repeating the Review draft action.
+    expect(screen.queryByText("Drafted reply")).toBeNull();
   });
 
   it("refreshes silently with no model turn, and takes one only when something is new", async () => {
@@ -128,6 +140,14 @@ describe("Gmail dashboard", () => {
     render(<App platform={browserPlatform} engine={new FakeEngine({ stepMs: 20, seed: false })} initialSettings={settings} />);
     const gmail = await screen.findByRole("region", { name: "Gmail" });
     const needsReply = await within(gmail).findByRole("region", { name: "Needs a reply" });
+    // Calm: the section is one line until opened; its items and their actions are inside.
+    expect(within(needsReply).queryByRole("button", { name: "Draft reply" })).toBeNull();
+    // (jsdom doesn't toggle <details> on a summary click; the browser checks do the real click.)
+    act(() => {
+      (needsReply.querySelector("details") as HTMLDetailsElement).open = true;
+    });
+    // Each item's action shows on hover or keyboard focus of the item.
+    act(() => (needsReply.querySelector(".mail") as HTMLElement).focus());
     fireEvent.click(within(needsReply).getAllByRole("button", { name: "Draft reply" })[0]!);
     fireEvent.click(screen.getByRole("button", { name: /^Approvals/ }));
     const drafts = await screen.findByTestId("drafts");
@@ -144,7 +164,16 @@ describe("agent-made widget", () => {
     expect(frame.getAttribute("sandbox")).toBe(AGENT_WIDGET_SANDBOX);
     expect(AGENT_WIDGET_SANDBOX.split(/\s+/)).toEqual(["allow-scripts"]);
     expect(frame.getAttribute("sandbox")).not.toContain("allow-same-origin");
-    expect(frame.getAttribute("srcdoc")).toBe("<p>hi</p>");
+    // The widget's own markup, behind the live theme's color-scheme (so the frame stays clear).
+    expect(frame.getAttribute("srcdoc")).toBe('<meta name="color-scheme" content="dark"><p>hi</p>');
+    expect(frame.dataset.scheme).toBe("dark");
+  });
+
+  it("states the theme's color-scheme in the widget document, after <head> or the doctype", () => {
+    expect(withColorScheme("<!doctype html><html><head><title>x</title></head></html>", "light")).toBe(
+      '<!doctype html><html><head><meta name="color-scheme" content="light"><title>x</title></head></html>',
+    );
+    expect(withColorScheme("<!doctype html><p>x</p>", "dark")).toBe('<!doctype html><meta name="color-scheme" content="dark"><p>x</p>');
   });
 });
 

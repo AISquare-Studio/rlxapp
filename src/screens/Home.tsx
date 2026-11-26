@@ -169,8 +169,7 @@ export function Home() {
               title={title}
               index={index}
               count={widgets.length}
-              wide={widget.type === "gmail"}
-              tall={widget.type === "gmail" || widget.type === "slack"}
+              tall={widget.type === "slack"}
               onMove={move}
               onRemove={() => dispatch({ type: "widget-remove", id: widget.id })}
               onDropWidget={(dragged) => dispatch({ type: "widget-move", id: dragged, to: index })}

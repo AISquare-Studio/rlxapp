@@ -8,6 +8,13 @@ import { Icon } from "../ui/Icon.tsx";
 import { MoreMenu } from "../ui/MoreMenu.tsx";
 import { AgentEditor } from "./AgentEditor.tsx";
 
+/** The owner's answer as a sentence of the reply: capitalised, and ending with a full stop. */
+function asSentence(text: string): string {
+  const t = text.trim();
+  const capital = t.charAt(0).toUpperCase() + t.slice(1);
+  return /[.!?]$/.test(capital) ? capital : `${capital}.`;
+}
+
 /** Auto's 10-second holds, by draft id, so Undo can stop one. */
 const holds = new Map<string, ReturnType<typeof setTimeout>>();
 const HOLD_MS = 10_000;
@@ -241,7 +248,7 @@ function NeedsContextCard({ message, card }: { message: Message; card: Extract<C
         connector: card.connector,
         destination: card.to,
         subject: card.subject,
-        body: card.draftTemplate.replace("{answer}", text),
+        body: card.draftTemplate.replace("{answer}", asSentence(text)),
         createdAt: now(),
         context: `Drafted from your answer: “${text}”`,
       },
@@ -274,7 +281,7 @@ function NeedsContextCard({ message, card }: { message: Message; card: Extract<C
       )}
       {!card.answered ? (
         <div className="quick-replies" aria-label="Quick replies">
-          {["Tuesday 11:00 or Wednesday 15:00", "Thursday afternoon"].map((q) => (
+          {["I'm free Tuesday at 11:00 or Wednesday at 15:00", "Thursday afternoon works for me"].map((q) => (
             <button key={q} type="button" className="button button--sm" onClick={() => reply(q)}>
               {q}
             </button>

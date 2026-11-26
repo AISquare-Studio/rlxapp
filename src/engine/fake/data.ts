@@ -417,7 +417,7 @@ export const BRIEFING: Briefing = {
     subject: "Re: Intro: Ravi from Northwind",
     connector: "claude.ai Gmail",
     sources: [{ label: "Email: “Intro: Ravi from Northwind”", connector: "Gmail", url: "https://example.com/gmail/g2" }],
-    draftTemplate: "Thanks Aiko! Ravi, great to meet you. I'm free {answer}. Would one of those work for you?",
+    draftTemplate: "Thanks Aiko! Ravi, great to meet you. {answer} Let me know what works for you.",
   },
   read: { meetings: 2, gmail: 4, slack: 5, merged: 2 },
 };

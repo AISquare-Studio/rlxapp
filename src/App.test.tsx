@@ -146,7 +146,7 @@ describe("App", () => {
       await new Promise((r) => setTimeout(r, 400));
     });
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
-    expect(await screen.findByText(/Finished: cancelled/)).toBeTruthy();
+    expect(await screen.findByText("Finished: cancelled")).toBeTruthy();
     const runs = await engine.runs();
     expect(runs.find((r) => r.title === "Draft the launch email")?.state).toBe("failed");
   });
