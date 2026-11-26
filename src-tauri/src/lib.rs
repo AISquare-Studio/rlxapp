@@ -2,6 +2,11 @@
 
 #[cfg(feature = "e2e")]
 mod e2e;
+
+// The e2e feature carries the canary command and a registry bypass for the probe's fixtures.
+// Test builds are debug builds (`npm run e2e:build`); a release never carries it.
+#[cfg(all(feature = "e2e", not(debug_assertions)))]
+compile_error!("the e2e feature is for debug test builds only (npm run e2e:build)");
 mod probe;
 pub mod widget_host;
 
@@ -210,6 +215,24 @@ mod tests {
             assert!(!sources.contains("'unsafe-"), "{directive}: {sources}");
             assert!(!sources.contains('*'), "{directive}: {sources}");
         }
+    }
+
+    #[test]
+    fn the_e2e_config_overlay_only_adds_a_webview2_debugging_port() {
+        // `npm run e2e:build` merges tauri.e2e.conf.json over tauri.conf.json, so msedgedriver
+        // can attach on Windows. The overlay's window must otherwise equal the product's.
+        let mut overlay = json(include_str!("../tauri.e2e.conf.json"))["app"]["windows"][0].clone();
+        let args = overlay
+            .as_object_mut()
+            .unwrap()
+            .remove("additionalBrowserArgs")
+            .expect("the overlay sets additionalBrowserArgs");
+        assert_eq!(
+            args,
+            "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --remote-debugging-port=9222"
+        );
+        let config = json(include_str!("../tauri.conf.json"));
+        assert_eq!(overlay, config["app"]["windows"][0]);
     }
 
     #[test]

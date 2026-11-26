@@ -162,15 +162,45 @@
       img.src = tag("img");
       return result;
     });
-    for (const rel of ["preconnect", "dns-prefetch", "prefetch"]) {
+    for (const rel of ["preconnect", "dns-prefetch", "prefetch", "preload", "modulepreload"]) {
       await attempt(rel, () => {
         const link = document.createElement("link");
         link.rel = rel;
+        if (rel === "preload") link.as = "fetch";
         link.href = tag(rel);
         document.head.append(link);
         return "added";
       });
     }
+    // Subresources CSP must stop: CSS url(), @import and @font-face, and SVG <image>.
+    await attempt("css-url", () => {
+      const div = document.createElement("div");
+      div.style.backgroundImage = `url(${tag("css-url")})`;
+      div.style.width = div.style.height = "4px";
+      document.body.append(div);
+      return "added";
+    });
+    await attempt("css-import-font", () => {
+      const style = document.createElement("style");
+      style.textContent = "@import url(" + tag("css-import") + ");" +
+        "@font-face{font-family:rlxprobe;src:url(" + tag("font-face") + ")}" +
+        ".rlxprobe-font{font-family:rlxprobe}";
+      document.head.append(style);
+      const span = document.createElement("span");
+      span.className = "rlxprobe-font";
+      span.textContent = "x";
+      document.body.append(span);
+      return "added";
+    });
+    await attempt("svg-image", () => {
+      const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+      const image = document.createElementNS("http://www.w3.org/2000/svg", "image");
+      image.setAttribute("href", tag("svg-image"));
+      svg.append(image);
+      document.body.append(svg);
+      return "added";
+    });
+
     await attempt("rtc", () => rtc(CONFIG.port));
   }
 
@@ -224,6 +254,18 @@
     report,
     /** The last step: every navigation the page and the fixture can try. */
     navigate() {
+      // The navigation step's evidence: the fixture's ack, and every frame-src violation
+      // this page sees (the fixture's self-navigation is blocked as a violation here).
+      report.navigation = { ack: null, violations: [] };
+      document.addEventListener("securitypolicyviolation", (event) => {
+        report.navigation.violations.push(`${event.effectiveDirective} ${event.blockedURI}`);
+      });
+      window.addEventListener("message", (event) => {
+        const fixtureFrame = [...document.querySelectorAll("iframe")].find((f) => f.dataset.widgetId === CONFIG.fixture);
+        if (fixtureFrame && event.source === fixtureFrame.contentWindow && event.data && event.data.type === "e2e-navigating") {
+          report.navigation.ack = Array.isArray(event.data.urls) ? event.data.urls.map(String) : [];
+        }
+      });
       const fixture = [...document.querySelectorAll("iframe")].find((f) => f.dataset.widgetId === CONFIG.fixture);
       if (fixture && fixture.contentWindow) fixture.contentWindow.postMessage({ type: "e2e-navigate" }, "*");
       setTimeout(() => {

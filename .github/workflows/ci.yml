@@ -38,6 +38,9 @@ env:
 #               working set and PSS); on macOS, scripts/measure-budgets.sh
 #               (phys_footprint, plus installer size and cold start);
 #             - an upload of the installers as run artifacts;
+#             - native e2e on the e2e test build: the widget isolation probe on every OS,
+#               and tauri-driver screen checks on Windows and Linux. Screenshots and probe
+#               results upload as e2e-screenshots-<os>;
 #             - last, the installer size gate: it fails the job if a .dmg, .msi,
 #               setup .exe, .deb or .rpm is over 25,000,000 bytes (the AppImage is
 #               report-only). It runs after the upload and the budget measurement,
@@ -59,15 +62,18 @@ jobs:
       matrix:
         include:
           - name: macOS
+            slug: macos
             os: macos-latest
             # DMGs are built only in CI: building one opens Finder windows (see README).
             bundles: app,dmg
             binary: src-tauri/target/release/bundle/macos/rlx.app/Contents/MacOS/rlxapp
           - name: Windows
+            slug: windows
             os: windows-latest
             bundles: msi,nsis
             binary: src-tauri/target/release/rlxapp.exe
           - name: Linux
+            slug: linux
             os: ubuntu-24.04
             bundles: deb,rpm,appimage
             binary: src-tauri/target/release/rlxapp
@@ -82,14 +88,14 @@ jobs:
         if: hashFiles('src-tauri/Cargo.toml') == ''
         run: echo "::notice::src-tauri/Cargo.toml is absent on this ref; the app steps are skipped."
 
-      - name: Install Linux system dependencies (WebKitGTK 4.1, xvfb)
+      - name: Install Linux system dependencies (WebKitGTK 4.1, its WebDriver, xvfb)
         if: runner.os == 'Linux' && hashFiles('src-tauri/Cargo.toml') != ''
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             build-essential file libssl-dev libxdo-dev \
             libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev \
-            xvfb
+            webkit2gtk-driver xvfb
 
       - uses: actions/setup-node@v7
         if: hashFiles('src-tauri/Cargo.toml') != ''
@@ -193,6 +199,58 @@ jobs:
             src-tauri/target/release/bundle/rpm/*.rpm
             src-tauri/target/release/bundle/appimage/*.AppImage
           if-no-files-found: error
+          retention-days: 14
+
+      # Native end-to-end tests (e2e/native/, `npm run e2e`) on the test build (cargo feature
+      # e2e): the widget isolation probe on every OS, then the tauri-driver screen checks on
+      # Windows and Linux. macOS has no WebDriver for WKWebView; its window, menu, close,
+      # reopen and quit checks run locally (scripts/mac-native-check.sh).
+      - name: Build the e2e test build
+        if: hashFiles('src-tauri/Cargo.toml') != ''
+        run: npm run e2e:build
+
+      - name: Install tauri-driver
+        if: runner.os != 'macOS' && hashFiles('src-tauri/Cargo.toml') != ''
+        run: cargo install tauri-driver --locked --version 2.1.0
+
+      # msedgedriver must match the WebView2 runtime the app runs on, not Edge.
+      - name: Install msedgedriver for this runner's WebView2
+        if: runner.os == 'Windows' && hashFiles('src-tauri/Cargo.toml') != ''
+        shell: pwsh
+        run: |
+          $keys = @(
+            'HKLM:\SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}',
+            'HKLM:\SOFTWARE\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}'
+          )
+          $version = $keys | ForEach-Object { (Get-ItemProperty -Path $_ -Name pv -ErrorAction SilentlyContinue).pv } | Where-Object { $_ } | Select-Object -First 1
+          if (-not $version) { throw 'No WebView2 runtime found in the registry' }
+          Write-Host "WebView2 runtime $version"
+          $dir = Join-Path $env:RUNNER_TEMP 'msedgedriver'
+          $zip = Join-Path $env:RUNNER_TEMP 'msedgedriver.zip'
+          Invoke-WebRequest "https://msedgedriver.microsoft.com/$version/edgedriver_win64.zip" -OutFile $zip
+          Expand-Archive $zip -DestinationPath $dir -Force
+          $driver = Join-Path $dir 'msedgedriver.exe'
+          & $driver --version
+          "TAURI_NATIVE_DRIVER=$driver" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "### WebView2 $version, msedgedriver $((& $driver --version) -join ' ')" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+
+      - name: Native e2e (xvfb)
+        if: runner.os == 'Linux' && hashFiles('src-tauri/Cargo.toml') != ''
+        run: xvfb-run --auto-servernum npm run e2e
+
+      - name: Native e2e
+        if: runner.os != 'Linux' && hashFiles('src-tauri/Cargo.toml') != ''
+        run: npm run e2e
+
+      - name: Upload e2e screenshots and probe results
+        if: always() && hashFiles('src-tauri/Cargo.toml') != ''
+        uses: actions/upload-artifact@v7
+        with:
+          name: e2e-screenshots-${{ matrix.slug }}
+          path: |
+            e2e/screenshots/
+            e2e/results/
+          if-no-files-found: warn
           retention-days: 14
 
       - name: Installer size gate (<= 25 MB)

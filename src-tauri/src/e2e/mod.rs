@@ -45,6 +45,16 @@ use crate::widget_host::state::{HostState, MountEntry, mount_now};
 use crate::widget_host::{self, Bounds, HostExtras, HostFn, PolicyInfo, Registry, Source};
 use listener::Listener;
 
+/// Every navigation the widgets webview's guard was asked about, with its answer. wry asks
+/// for each one on macOS but only for top-level ones on Windows, so this shows what the guard
+/// actually saw on each OS.
+static NAVIGATIONS: Mutex<Vec<(String, bool)>> = Mutex::new(Vec::new());
+
+/// Called by the widgets webview's navigation guard in test builds.
+pub fn record_navigation(url: &str, allowed: bool) {
+    lock(&NAVIGATIONS).push((url.to_owned(), allowed));
+}
+
 /// Names the file the report is written to. Unset, the probe doesn't run.
 pub const ENV_REPORT: &str = "RLXAPP_E2E_REPORT";
 
@@ -450,7 +460,7 @@ impl Run {
             // Navigation goes last: if it isn't blocked, the page is gone.
             let _ = widgets.eval("window.__rlxProbe.navigate()");
             thread::sleep(Duration::from_secs(5));
-            let after = "JSON.stringify({ href: location.href, frames: document.querySelectorAll('iframe').length })";
+            let after = "JSON.stringify({ href: location.href, frames: document.querySelectorAll('iframe').length, navigation: window.__rlxProbe ? window.__rlxProbe.report.navigation : null })";
             host_after_nav = eval_value(widgets, after, Duration::from_secs(5))
                 .and_then(|v| v.as_str().and_then(|s| serde_json::from_str(s).ok()))
                 .unwrap_or(Value::Null);
@@ -501,6 +511,10 @@ impl Run {
             "main": main_report,
             "canary": canary,
             "actions": actions,
+            "navigations": lock(&NAVIGATIONS)
+                .iter()
+                .map(|(url, allowed)| json!({ "url": url, "allowed": allowed }))
+                .collect::<Vec<_>>(),
             "listeners": {
                 "host": listener("host", &self.listeners.host, self.self_tests[0]),
                 "iframe": listener("iframe", &self.listeners.iframe, self.self_tests[1]),
