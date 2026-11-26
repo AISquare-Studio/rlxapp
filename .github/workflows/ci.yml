@@ -236,9 +236,9 @@ jobs:
 
       # RLX_PROBE_STRICT=1 makes every gate check fail the run, whatever the agent-made widgets
       # switch says, so the widgets webview's network isolation (its deny-all proxy,
-      # src-tauri/src/widget_host/proxy.rs) must hold on Windows and Linux. macOS records its
-      # gates without failing: it never proxies loopback, so a widget's preconnect still
-      # reaches the probe's loopback listener there.
+      # src-tauri/src/widget_host/proxy.rs) must hold on every OS. On macOS, which never
+      # proxies loopback, the gate is off-machine preconnect and loopback is recorded as the
+      # documented residual.
       - name: Native e2e (xvfb)
         if: runner.os == 'Linux' && hashFiles('src-tauri/Cargo.toml') != ''
         env:
@@ -248,7 +248,7 @@ jobs:
       - name: Native e2e
         if: runner.os != 'Linux' && hashFiles('src-tauri/Cargo.toml') != ''
         env:
-          RLX_PROBE_STRICT: ${{ runner.os == 'Windows' && '1' || '0' }}
+          RLX_PROBE_STRICT: "1"
         run: npm run e2e
 
       - name: Upload e2e screenshots and probe results

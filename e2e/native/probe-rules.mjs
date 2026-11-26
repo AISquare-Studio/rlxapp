@@ -128,11 +128,18 @@ function evaluateChecks(report, stderr) {
       (contract.length === 0 ? "0 connections, 0 datagrams" : summarizeHits(contract)) +
         (policy.widgetWebview ? "" : " (probe-only webview: the product attaches none on this OS)"),
     );
-    gate(
-      `${label}: 0 preconnect/dns-prefetch connections`,
-      silent.length === 0,
-      silent.length === 0 ? "0 connections" : `${silent.length} TCP connection(s) that sent nothing: ${summarizeHits(silent)}`,
-    );
+    const silentDetail = silent.length === 0 ? "0 connections" : `${silent.length} TCP connection(s) that sent nothing: ${summarizeHits(silent)}`;
+    if (report.os === "macos") {
+      // The documented macOS residual (the owner's call): Network.framework never proxies
+      // loopback, so a preconnect can still open an empty connection to a port on this
+      // machine. Off-machine preconnect is the gate there instead (below).
+      info(
+        `${label}: loopback preconnect/dns-prefetch (documented macOS residual)`,
+        `${silentDetail}. macOS never proxies loopback; the gate here is off-machine preconnect (src-tauri/src/widget_host/proxy.rs)`,
+      );
+    } else {
+      gate(`${label}: 0 preconnect/dns-prefetch connections`, silent.length === 0, silentDetail);
+    }
   }
   // The deny-all proxy (src-tauri/src/widget_host/proxy.rs). Where this OS has a per-webview
   // proxy, a widgets webview without it is a bug. Where it has none (macOS 11-13), agent-made

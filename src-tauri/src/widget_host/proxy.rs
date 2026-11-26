@@ -20,7 +20,7 @@
 //!
 //! | OS | Widgets webview in v0 | Deny-all proxy | Agent-made widgets eligible |
 //! | --- | --- | --- | --- |
-//! | macOS 14+ | yes | yes, except loopback: on the widgets webview's own non-persistent `WKWebsiteDataStore` (Tauri's `macos-proxy`) | the owner's call: the probe's loopback-preconnect gate can't pass there |
+//! | macOS 14+ | yes | yes, except loopback (the documented residual below): on the widgets webview's own non-persistent `WKWebsiteDataStore` (Tauri's `macos-proxy`) | yes, once the probe passes; its gate there is off-machine preconnect |
 //! | macOS 11-13 | yes, built-ins only | no: WebKit has no per-webview proxy before macOS 14 | no, never |
 //! | Windows 10/11 (WebView2) | no; the probe attaches one | yes: the widgets webview's own WebView2 environment and user-data folder, with `--proxy-server` and `--proxy-bypass-list=<-loopback>` | once the product attaches a widgets webview there and the probe passes |
 //! | Linux (WebKitGTK) | no: WebKitGTK can't place a child webview | in code: an ephemeral web context with a custom proxy; untested, since nothing attaches | no |
@@ -29,11 +29,13 @@
 //! why built-ins set connector text with `textContent` only ([`super::BUILTIN_HTML_SINKS`]).
 //!
 //! What the proxy doesn't cover:
-//! - **Loopback on macOS.** Network.framework never proxies loopback (`127.0.0.1`,
-//!   `localhost`), with an HTTP or a SOCKS proxy alike, and has no setting for it. So on macOS
-//!   a widget's preconnect can still open an empty TCP connection to a port on this machine,
-//!   which only a local process sees. Off-machine names and addresses do go to the proxy.
-//!   WebView2 proxies loopback too, given `<-loopback>`.
+//! - **Loopback on macOS**, a documented residual the owner accepted. Network.framework never
+//!   proxies loopback (`127.0.0.1`, `localhost`), with an HTTP or a SOCKS proxy alike, and
+//!   has no setting for it. So on macOS a widget's preconnect can still open an empty TCP
+//!   connection to a port on this machine, which only a local process sees. Off-machine names
+//!   and addresses do go to the proxy. The probe records loopback preconnect as info on
+//!   macOS and gates on off-machine preconnect there. Elsewhere loopback stays a gate:
+//!   WebView2 proxies it too, given `<-loopback>`.
 //! - **DNS** the engine resolves outside its proxy settings (a `dns-prefetch`, say). The
 //!   probe can't see it, so that channel is unmeasured.
 

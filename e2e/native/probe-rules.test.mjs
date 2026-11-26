@@ -71,6 +71,18 @@ function passingReport() {
 
 const failing = (checks) => checks.filter((c) => !c.ok).map((c) => c.id);
 
+/** Runs `fn` with RLX_PROBE_STRICT=1, as CI does. */
+function strictly(fn) {
+  const before = process.env.RLX_PROBE_STRICT;
+  process.env.RLX_PROBE_STRICT = "1";
+  try {
+    return fn();
+  } finally {
+    if (before === undefined) delete process.env.RLX_PROBE_STRICT;
+    else process.env.RLX_PROBE_STRICT = before;
+  }
+}
+
 describe("isolation probe rules", () => {
   it("passes a clean report", () => {
     const checks = evaluate(passingReport());
@@ -125,14 +137,44 @@ describe("isolation probe rules", () => {
     ]);
     expect(passed(checks)).toBe(true);
     expect(agentVerdict(checks).mayTurnOn).toBe(false);
-    const before = process.env.RLX_PROBE_STRICT;
-    process.env.RLX_PROBE_STRICT = "1";
-    try {
+    strictly(() => {
       expect(passed(evaluate(report))).toBe(false);
       expect(passed(evaluate(passingReport()))).toBe(true);
-    } finally {
-      if (before === undefined) delete process.env.RLX_PROBE_STRICT;
-      else process.env.RLX_PROBE_STRICT = before;
+    });
+  });
+
+  it("records a loopback preconnect as the documented residual on macOS, where off-machine preconnect is the gate", () => {
+    const report = passingReport();
+    report.listeners.host.hits = ["1 tcp connection, no data", "2 tcp connection, no data"];
+    report.listeners.iframe.hits = ["1 tcp connection, no data"];
+    const checks = evaluate(report);
+    const residual = checks.filter((c) => c.id.endsWith("loopback preconnect/dns-prefetch (documented macOS residual)"));
+    expect(residual.map((c) => [c.id, c.info])).toEqual([
+      ["host page: loopback preconnect/dns-prefetch (documented macOS residual)", true],
+      ["widget iframe: loopback preconnect/dns-prefetch (documented macOS residual)", true],
+    ]);
+    expect(residual[0].detail).toMatch(/^2 TCP connection\(s\) that sent nothing: preconnect ×2\. macOS never proxies loopback/);
+    expect(checks.some((c) => c.id.endsWith(": 0 preconnect/dns-prefetch connections"))).toBe(false);
+    expect(failing(checks)).toEqual([]);
+    expect(agentVerdict(checks).mayTurnOn).toBe(true);
+    strictly(() => expect(passed(evaluate(report))).toBe(true));
+    // The off-machine gate still holds there: nothing refused means the attempts left the Mac.
+    report.proxy.refused = 0;
+    expect(failing(evaluate(report))).toEqual(["preconnect and dns-prefetch off the machine reach only the deny-all proxy"]);
+    strictly(() => expect(passed(evaluate(report))).toBe(false));
+  });
+
+  it("keeps a loopback preconnect a gate on Windows and Linux", () => {
+    for (const os of ["windows", "linux"]) {
+      const report = passingReport();
+      report.os = os;
+      report.listeners.iframe.hits = ["1 tcp connection, no data"];
+      const checks = evaluate(report);
+      expect(failing(checks)).toEqual(["widget iframe: 0 preconnect/dns-prefetch connections"]);
+      expect(checks.some((c) => c.id.includes("documented macOS residual"))).toBe(false);
+      expect(passed(checks)).toBe(true);
+      expect(agentVerdict(checks).mayTurnOn).toBe(false);
+      strictly(() => expect(passed(evaluate(report))).toBe(false));
     }
   });
 
@@ -191,8 +233,9 @@ describe("isolation probe rules", () => {
     expect(passed(evaluate(report))).toBe(true);
   });
 
-  it("fails hard on a fetch or WebRTC connection, and gates on a preconnect", () => {
+  it("fails hard on a fetch or WebRTC connection, and gates on a preconnect (Windows)", () => {
     const report = passingReport();
+    report.os = "windows";
     report.listeners.iframe.hits = ["1 tcp GET /widget-iframe/fetch HTTP/1.1"];
     expect(passed(evaluate(report))).toBe(false);
     report.listeners.iframe.hits = ["1 udp 20 bytes (STUN/TURN)"];
