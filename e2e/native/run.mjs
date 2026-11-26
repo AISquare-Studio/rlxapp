@@ -23,6 +23,9 @@ import { defaultBinary, osName, repoRoot, screenshotsDir } from "./paths.mjs";
 import { stopTree, waitForWebviewsToExit, webviewProcesses } from "./processes.mjs";
 import { Session, startTauriDriver } from "./webdriver.mjs";
 
+/** The WebView2 debugging port the test build opens (src-tauri/tauri.e2e.conf.json). */
+const DEVTOOLS_PORT = 9222;
+
 const { values } = parseArgs({
   options: {
     app: { type: "string" },
@@ -54,9 +57,6 @@ if (!values.only || values.only === "screens") {
   }
 }
 process.exit(failed ? 1 : 0);
-
-/** The WebView2 debugging port the test build opens (src-tauri/tauri.e2e.conf.json). */
-const DEVTOOLS_PORT = 9222;
 
 /**
  * Windows: msedgedriver can't launch the app itself. It passes its remote-debugging

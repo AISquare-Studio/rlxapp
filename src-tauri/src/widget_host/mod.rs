@@ -664,7 +664,22 @@ fn add_widgets_webview<R: Runtime>(
 ) -> Result<Webview<R>, AttachError> {
     use tauri::Manager;
     let url = Url::parse(&format!("{SCHEME}://localhost/host/")).expect("static URL parses");
-    let builder = WebviewBuilder::new(LABEL, WebviewUrl::CustomProtocol(url))
+    let mut builder = WebviewBuilder::new(LABEL, WebviewUrl::CustomProtocol(url));
+    // WebView2 shares one browser process per user-data folder, and refuses a second
+    // environment with other options (0x8007139F). So the widgets webview takes the main
+    // window's browser arguments, if the config sets any. Other webviews ignore them.
+    let main_args = window
+        .app_handle()
+        .config()
+        .app
+        .windows
+        .iter()
+        .find(|w| w.label == "main")
+        .and_then(|w| w.additional_browser_args.clone());
+    if let Some(args) = main_args {
+        builder = builder.additional_browser_args(&args);
+    }
+    let builder = builder
         .on_navigation(|url| {
             let allowed = allow_navigation(url);
             #[cfg(feature = "e2e")]
