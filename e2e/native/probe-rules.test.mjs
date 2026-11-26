@@ -155,6 +155,8 @@ describe("isolation probe rules", () => {
     report.host = null;
     report.actions = [];
     expect(failing(evaluate(report))).toEqual([]);
+    expect(agentVerdict(evaluate(report)).mayTurnOn).toBe(false);
+    expect(toMarkdown("probe", evaluate(report))).toContain("no widget webview in v0");
     report.webviews = ["main", "widgets"];
     expect(failing(evaluate(report))).toContain("no other webviews");
   });

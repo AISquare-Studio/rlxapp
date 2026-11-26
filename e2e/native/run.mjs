@@ -151,7 +151,15 @@ async function runScreens() {
           os,
           logoPaths: logoPaths(),
           shot: async (shotName) => save(await session.screenshot(), shotName),
-          shotElement: async (element, shotName) => save(await session.elementScreenshot(element), shotName),
+          // WebKitWebDriver's element snapshots come out blank (all black) under xvfb, so on
+          // Linux only whole-window shots are kept; they show the same element.
+          shotElement: async (element, shotName) => {
+            if (os === "linux") {
+              console.log(`screens: ${label}: element shot '${shotName}' skipped on Linux (WebKitWebDriver snapshots elements blank)`);
+              return;
+            }
+            save(await session.elementScreenshot(element), shotName);
+          },
         });
         results.push({ label, ok: true, detail: `${saved.length} screenshot(s)`, ms: Date.now() - started });
       } catch (error) {

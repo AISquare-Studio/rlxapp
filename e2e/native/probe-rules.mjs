@@ -45,6 +45,9 @@ export function evaluate(report, { stderr = "" } = {}) {
 
 /** Whether agent-made widgets may be turned on for the OS the report came from. */
 export function agentVerdict(checks) {
+  if (checks.some((c) => c.noWebview)) {
+    return { mayTurnOn: false, why: "this OS has no widget webview in v0", noWebview: true };
+  }
   const failing = checks.filter((c) => !c.ok);
   return failing.length === 0
     ? { mayTurnOn: true, why: "every check passed" }
@@ -157,7 +160,10 @@ function evaluateChecks(report, stderr) {
       JSON.stringify(webviews) === JSON.stringify(expected),
       `webviews: ${webviews.join(", ")}${probed ? " (widgets attached for the probe only)" : ""}`,
     );
-    if (!probed) return checks;
+    if (!probed) {
+      checks.push({ id: "no widget webview on this OS", ok: true, info: true, noWebview: true, detail: "nothing here to turn on" });
+      return checks;
+    }
   } else {
     check(
       "widgets webview attached",
@@ -341,9 +347,11 @@ export function toMarkdown(title, checks) {
   const lines = [
     `### ${title}: ${failed.length === 0 ? "PASS" : `FAIL (${failed.length})`}`,
     "",
-    verdict.mayTurnOn
-      ? "Agent-made widgets: the probe passes in full here, so the owner may turn them on for this OS."
-      : `Agent-made widgets must stay **off** on this OS. Failing: ${verdict.why}.`,
+    verdict.noWebview
+      ? "Agent-made widgets stay off: this OS has no widget webview in v0, so only the switch and main's checks apply."
+      : verdict.mayTurnOn
+        ? "Agent-made widgets: the probe passes in full here, so the owner may turn them on for this OS."
+        : `Agent-made widgets must stay **off** on this OS. Failing: ${verdict.why}.`,
     "",
     "✅ pass · ❌ fail · ⛔ fail that keeps agent-made widgets off (the switch is off, so the run continues) · ℹ️ recorded only",
     "",
