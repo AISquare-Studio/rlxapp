@@ -284,9 +284,9 @@ jobs:
           RLX_PROBE_STRICT: "1"
         run: npm run e2e
 
-      # With frames.js's WebRTC removal skipped, WebView2's own WebRTC policy
-      # (disable_non_proxied_udp, src-tauri/src/widget_host/proxy.rs) must keep WebRTC to the
-      # deny-all proxy alone. macOS has no such policy, so frames.js is all there is there.
+      # With frames.js's WebRTC removal skipped: records what WebView2's network setup alone
+      # does with WebRTC (its UDP gets past the proxy, so frames.js is the barrier), and still
+      # gates every other channel strictly (src-tauri/src/widget_host/proxy.rs).
       - name: Native e2e, WebRTC kept (Windows)
         if: runner.os == 'Windows' && hashFiles('src-tauri/Cargo.toml') != ''
         env:

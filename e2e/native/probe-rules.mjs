@@ -138,11 +138,15 @@ function evaluateChecks(report, stderr) {
     );
   }
 
-  // Connections. Each side has its own listener; a hit is classified by what it carried.
+  // Connections. Each side has its own listener; a hit is classified by what it carried. In
+  // the WebRTC-kept run (frames.js skipped) WebRTC's hits are recorded, not gated: no proxy
+  // governs WebRTC, so frames.js is its barrier, and that run measures what gets past.
+  const webrtcKept = String(report.webrtc ?? "").startsWith("kept");
   for (const side of ["host", "iframe"]) {
     if (!probed) break;
     const hits = (listeners[side]?.hits ?? []).map(classifyHit);
-    const contract = hits.filter((h) => h.vector !== "preconnect");
+    const rtcHits = hits.filter((h) => h.vector === "rtc");
+    const contract = hits.filter((h) => h.vector !== "preconnect" && !(webrtcKept && h.vector === "rtc"));
     const silent = hits.filter((h) => h.vector === "preconnect");
     const label = side === "host" ? "host page" : "widget iframe";
     // On a webview only the probe attached (the product attaches none on this OS), a leak
@@ -153,6 +157,14 @@ function evaluateChecks(report, stderr) {
       (contract.length === 0 ? "0 connections, 0 datagrams" : summarizeHits(contract)) +
         (policy.widgetWebview ? "" : " (probe-only webview: the product attaches none on this OS)"),
     );
+    if (webrtcKept) {
+      info(
+        `${label}: WebRTC with frames.js skipped (recorded)`,
+        rtcHits.length === 0
+          ? "0 STUN/TURN hits"
+          : `${summarizeHits(rtcHits)}: WebRTC's UDP gets past the proxy, so frames.js is its only barrier`,
+      );
+    }
     const silentDetail = silent.length === 0 ? "0 connections" : `${silent.length} TCP connection(s) that sent nothing: ${summarizeHits(silent)}`;
     if (report.os === "macos") {
       // The macOS local-network residual: Network.framework never proxies loopback, so a
@@ -348,7 +360,7 @@ function evaluateChecks(report, stderr) {
   // The WebRTC-kept run (RLXAPP_E2E_RTC=kept): frames.js is skipped, so the connection rows
   // above show what the network setup alone does with WebRTC. It must have run in both
   // frames, or "0 connections" proves nothing.
-  if (String(report.webrtc ?? "").startsWith("kept")) {
+  if (webrtcKept) {
     const rtcRun = (list) => (list ?? []).find((c) => c.kind === "rtc")?.outcome ?? "not run";
     const runs = [rtcRun(host.connections), rtcRun(host.iframe?.connections)];
     check(

@@ -20,8 +20,7 @@
 //! - **Navigation** in the widgets webview stays on the scheme ([`allow_navigation`]), and the
 //!   host CSP's frame-src holds every frame there. New windows are denied.
 //! - **WebRTC** is removed from every frame (frames.js): neither CSP nor the deny-all proxy
-//!   governs it. On Windows the widgets' WebView2 also allows WebRTC no UDP that bypasses
-//!   the proxy ([`proxy::webview2_args`]).
+//!   governs it, on any OS (measured; see [`proxy`]), so frames.js is its only barrier.
 //! - **Network.** The widgets webview runs behind a deny-all proxy where the OS has a
 //!   per-webview proxy ([`proxy`], which has the OS-capability matrix and the measured
 //!   residual), since CSP doesn't govern preconnect either. It keeps its own data store, web

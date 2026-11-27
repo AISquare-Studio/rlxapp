@@ -31,8 +31,8 @@
 //!    listeners on this host's own addresses see what went past it; with `RLXAPP_E2E_DNS_PORT`
 //!    set, a DNS listener sees what was looked up (dns.rs).
 //!
-//! `RLXAPP_E2E_RTC=kept` skips frames.js's WebRTC removal, to check that the network setup
-//! alone keeps WebRTC in (Windows: WebView2's `disable_non_proxied_udp`).
+//! `RLXAPP_E2E_RTC=kept` skips frames.js's WebRTC removal, to record what the network setup
+//! alone does with WebRTC (on Windows, its UDP gets past the proxy: frames.js is the barrier).
 //!
 //! The canary command `e2e_canary` is granted to the main webview only, by a runtime
 //! capability below. Any call recorded from another webview means a widget ran a command.

@@ -9,7 +9,7 @@
 // WebView2 sends nothing to the proxy for most of them. Main's direct attempt to its own
 // TEST-NET address is the witness's positive control (probe-rules.mjs).
 //
-// --rtc-kept runs it with frames.js's WebRTC removal skipped (RLXAPP_E2E_RTC=kept), to check
+// --rtc-kept runs it with frames.js's WebRTC removal skipped (RLXAPP_E2E_RTC=kept), to record
 // what the widgets webview's network setup alone does with WebRTC; its results go to
 // isolation-probe-<os>-webrtc-kept.*. With RLXAPP_E2E_DNS_PORT set (CI, with the probe's DNS
 // zone routed to that port), the app also measures DNS (src-tauri/src/e2e/dns.rs).

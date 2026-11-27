@@ -481,9 +481,23 @@ describe("isolation probe rules", () => {
     report.host.connections = [{ kind: "rtc", outcome: "gathering complete" }];
     report.host.iframe.connections = [{ kind: "rtc", outcome: "gathering complete" }];
     expect(failing(evaluate(report))).toEqual([]);
-    // Its STUN reaching the listener fails the frame's connection row.
-    report.listeners.iframe.hits = ["1 udp 20 bytes (STUN/TURN)"];
-    expect(failing(evaluate(report))[0]).toMatch(/^widget iframe: 0 connections/);
+    // Its STUN reaching the listener is recorded (frames.js is WebRTC's barrier); every other
+    // channel stays gated, strictly.
+    report.listeners.iframe.hits = ["1 udp 20 bytes (STUN/TURN)", "2 udp 28 bytes (STUN/TURN)"];
+    let checks = strictly(() => evaluate(report));
+    expect(failing(checks)).toEqual([]);
+    expect(checks.find((c) => c.id === "widget iframe: WebRTC with frames.js skipped (recorded)")).toMatchObject({
+      info: true,
+      detail: "rtc ×2: WebRTC's UDP gets past the proxy, so frames.js is its only barrier",
+    });
+    report.listeners.iframe.hits.push("3 tcp GET /widget-iframe/fetch HTTP/1.1");
+    checks = strictly(() => evaluate(report));
+    expect(failing(checks)[0]).toMatch(/^widget iframe: 0 connections/);
+    expect(passed(checks)).toBe(false);
+    // Outside that run, a WebRTC hit is a channel like any other.
+    const normal = passingReport("windows");
+    normal.listeners.iframe.hits = ["1 udp 20 bytes (STUN/TURN)"];
+    expect(failing(evaluate(normal))[0]).toMatch(/^widget iframe: 0 connections/);
     expect(evaluate(passingReport()).some((c) => c.id === id)).toBe(false);
   });
 

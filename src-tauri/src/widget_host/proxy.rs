@@ -24,7 +24,7 @@
 //! | --- | --- | --- | --- |
 //! | macOS 14+ | yes, built-ins only | yes, on the widgets webview's own non-persistent `WKWebsiteDataStore` (Tauri's `macos-proxy`), except the residual below | **no** (the owner's decision): WebKit resolves `dns-prefetch` names outside the proxy ([`Residual::DnsPrefetchLeak`]). Declarative widgets only, until rlx can turn DNS prefetching off for the widgets webview through a supported, safe path |
 //! | macOS 11-13, or a version that can't be read | yes, built-ins only | no: WebKit has no per-webview proxy before macOS 14 | no, never |
-//! | Windows 10/11 (WebView2) | no; the probe attaches one | yes: the widgets webview's own WebView2 environment and user-data folder, with `--proxy-server`, `--proxy-bypass-list=<-loopback>` and no WebRTC UDP past it | yes, once the product attaches a widgets webview there and the probe passes strict |
+//! | Windows 10/11 (WebView2) | no; the probe attaches one | yes: the widgets webview's own WebView2 environment and user-data folder, with `--proxy-server` and `--proxy-bypass-list=<-loopback>` | yes, once the product attaches a widgets webview there and the probe passes strict |
 //! | Linux (WebKitGTK) | no: WebKitGTK can't place a child webview | in code: an ephemeral web context with a custom proxy; untested, since nothing attaches | no |
 //!
 //! On macOS 11-13 the built-ins still render in the widgets webview without a proxy. That is
@@ -62,10 +62,12 @@
 //!   subnet), `.local` names, `*.localhost` names (so no page-chosen SNI reaches a local
 //!   port), TEST-NET addresses and external names. The probe gates on each of those, per side
 //!   and target, on macOS too.
-//! - **WebRTC, on every OS.** A proxy doesn't govern it. `frames.js` removes it from every
-//!   frame of the widgets webview. On Windows the widgets' WebView2 also gets
-//!   `--force-webrtc-ip-handling-policy=disable_non_proxied_udp`, so WebRTC there can only
-//!   go through the deny-all proxy; the probe checks it with `frames.js` skipped.
+//! - **WebRTC, on every OS.** A proxy doesn't govern it, so `frames.js`, which removes it from
+//!   every frame of the widgets webview, is its only barrier. Measured on Windows with
+//!   `frames.js` skipped (the probe's WebRTC-kept run): TURN over TCP goes to the proxy, but
+//!   STUN/TURN over UDP reaches a loopback listener directly. WebView2 ignores
+//!   `--force-webrtc-ip-handling-policy=disable_non_proxied_udp` (tried and measured), so the
+//!   widgets' WebView2 doesn't get it.
 //! - **Windows: nothing measured gets past it.** Behind the proxy the widgets' preconnects
 //!   produced nothing anywhere in CI: no `CONNECT` at the proxy (WebView2 appears to drop
 //!   them), no direct connection to this host, no TCP connection attempt off it (a `netstat`
@@ -240,14 +242,13 @@ pub fn url(port: u16) -> Url {
 /// The WebView2 browser arguments of the widgets webview's own environment: wry's defaults
 /// plus the proxy. Chromium sends loopback hosts straight past any proxy unless
 /// `<-loopback>` removes that rule, and a page can name a loopback host as easily as any
-/// other. WebRTC gets no UDP that bypasses the proxy, so it too can reach only the proxy
-/// (behind `frames.js`, which removes it). Main's arguments are never copied in, so its
-/// remote-debugging port (test builds) stays main's alone.
+/// other. No WebRTC policy: WebView2 ignores `--force-webrtc-ip-handling-policy` (measured;
+/// see the module docs), so `frames.js` is WebRTC's barrier. Main's arguments are never
+/// copied in, so its remote-debugging port (test builds) stays main's alone.
 pub fn webview2_args(port: u16) -> String {
     format!(
         "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection \
-         --proxy-server=http://127.0.0.1:{port} --proxy-bypass-list=<-loopback> \
-         --force-webrtc-ip-handling-policy=disable_non_proxied_udp"
+         --proxy-server=http://127.0.0.1:{port} --proxy-bypass-list=<-loopback>"
     )
 }
 
@@ -418,13 +419,12 @@ mod tests {
     }
 
     #[test]
-    fn webview2_args_proxy_loopback_and_webrtc_too() {
+    fn webview2_args_proxy_loopback_too() {
         let args = webview2_args(4321);
         let args: Vec<&str> = args.split_whitespace().collect();
         for arg in [
             "--proxy-server=http://127.0.0.1:4321",
             "--proxy-bypass-list=<-loopback>",
-            "--force-webrtc-ip-handling-policy=disable_non_proxied_udp",
         ] {
             assert!(args.contains(&arg), "{arg}");
         }
