@@ -120,6 +120,18 @@ for (const theme of ["dark", "light"] as const) {
     await tile.screenshot({ path: `docs/gallery/${label}-28-agent-widget-tile.png` });
   });
 
+  test(`Slack digest tile in ${label}`, async ({ page }) => {
+    await openShell(page, { theme });
+    const tile = page.getByRole("region", { name: "Slack digest" });
+    await tile.getByText(/Priya Shah/).first().waitFor();
+    await page.waitForTimeout(400);
+    await tile.screenshot({ path: `docs/gallery/${label}-30-slack-digest.png` });
+    // An item with keyboard focus: its channel, time, reason and Draft reply show.
+    await tile.locator(".feed__item--needs-you").first().focus();
+    await page.waitForTimeout(300);
+    await tile.screenshot({ path: `docs/gallery/${label}-31-slack-digest-focused.png` });
+  });
+
   test(`settings with Developer mode off in ${label}`, async ({ page }) => {
     await openShell(page, { theme, devMode: false });
     await page.getByRole("navigation", { name: "Navigation" }).getByRole("button", { name: "Settings" }).click();
