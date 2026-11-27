@@ -231,6 +231,32 @@ describe("isolation probe rules", () => {
     expect(passed(evaluate(report))).toBe(false);
   });
 
+  // hitFits: a direct hit goes only to an attempt that could have sent it. Each case below
+  // fails if the matching check is dropped (the tester's counterexamples).
+  it("ADDR: an IP-literal target takes a direct hit only at its own address", () => {
+    // A plain connection at 127.0.0.1, in loopback-v6's http slot: [::1] can't have sent it,
+    // so it goes to sub-localhost's http preconnect, which went to the proxy, and fails it.
+    const report = passingReport();
+    const v6 = report.host.iframe.reach.find((a) => a.id === "loopback-v6" && a.scheme === "http");
+    report.listeners.reachIframe.hits.push(`${v6.at + 2} tcp@127.0.0.1 connection, no data`);
+    const checks = strictly(() => evaluate(report));
+    expect(failing(checks)).toEqual(["widget iframe → sub-localhost (rlx-widget-iframe.localhost) reaches only the deny-all proxy"]);
+    expect(checks.find((c) => c.id.startsWith("widget iframe → sub-localhost")).detail).toMatch(/^http: CONNECT \S+; direct: tcp@127\.0\.0\.1 connection, no data/);
+    expect(passed(checks)).toBe(false);
+  });
+
+  it("SNI: an https attempt takes a ClientHello only with the SNI its host sends", () => {
+    // A ClientHello naming sub-localhost, at [::1] in loopback-v6's https slot: an IP literal
+    // sends no SNI, so it goes to sub-localhost's https preconnect and fails it.
+    const report = passingReport();
+    const v6 = report.host.iframe.reach.find((a) => a.id === "loopback-v6" && a.scheme === "https");
+    report.listeners.reachIframe.hits.push(`${v6.at + 2} tcp@::1 tls ClientHello, sni=rlx-widget-iframe.localhost`);
+    const checks = strictly(() => evaluate(report));
+    expect(failing(checks)).toEqual(["widget iframe → sub-localhost (rlx-widget-iframe.localhost) reaches only the deny-all proxy"]);
+    expect(checks.find((c) => c.id.startsWith("widget iframe → sub-localhost")).detail).toMatch(/https: CONNECT \S+; direct: tcp@::1 tls ClientHello, sni=rlx-widget-iframe\.localhost$/);
+    expect(passed(checks)).toBe(false);
+  });
+
   it("gives a late direct hit to the attempt that could have sent it, not to the next one (macOS CI)", () => {
     // CI, macOS 26.7: localhost's https ClientHellos came 200-242 ms late, the last one inside
     // the slot of sub-localhost's http preconnect, which went to the proxy.
