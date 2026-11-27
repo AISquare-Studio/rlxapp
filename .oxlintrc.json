@@ -21,6 +21,48 @@
       }
     ],
     "react/react-in-jsx-scope": "off",
+    "react/no-danger": "error",
+    "eslint/no-restricted-properties": [
+      "error",
+      {
+        "property": "innerHTML",
+        "message": "Render connector and agent text as text (textContent, or escaped React): markup parsed from it can reach the network, since CSP doesn't govern preconnect (src-tauri/src/widget_host/proxy.rs)."
+      },
+      {
+        "property": "outerHTML",
+        "message": "Render connector and agent text as text (textContent, or escaped React): markup parsed from it can reach the network, since CSP doesn't govern preconnect (src-tauri/src/widget_host/proxy.rs)."
+      },
+      {
+        "property": "insertAdjacentHTML",
+        "message": "Render connector and agent text as text (textContent, or escaped React): markup parsed from it can reach the network, since CSP doesn't govern preconnect (src-tauri/src/widget_host/proxy.rs)."
+      },
+      {
+        "property": "setHTMLUnsafe",
+        "message": "Render connector and agent text as text (textContent, or escaped React): markup parsed from it can reach the network, since CSP doesn't govern preconnect (src-tauri/src/widget_host/proxy.rs)."
+      },
+      {
+        "property": "parseHTMLUnsafe",
+        "message": "Render connector and agent text as text (textContent, or escaped React): markup parsed from it can reach the network, since CSP doesn't govern preconnect (src-tauri/src/widget_host/proxy.rs)."
+      },
+      {
+        "property": "createContextualFragment",
+        "message": "Render connector and agent text as text (textContent, or escaped React): markup parsed from it can reach the network, since CSP doesn't govern preconnect (src-tauri/src/widget_host/proxy.rs)."
+      },
+      {
+        "property": "srcdoc",
+        "message": "Render connector and agent text as text (textContent, or escaped React): markup parsed from it can reach the network, since CSP doesn't govern preconnect (src-tauri/src/widget_host/proxy.rs)."
+      },
+      {
+        "object": "document",
+        "property": "write",
+        "message": "Render connector and agent text as text (textContent, or escaped React): markup parsed from it can reach the network, since CSP doesn't govern preconnect (src-tauri/src/widget_host/proxy.rs)."
+      },
+      {
+        "object": "document",
+        "property": "writeln",
+        "message": "Render connector and agent text as text (textContent, or escaped React): markup parsed from it can reach the network, since CSP doesn't govern preconnect (src-tauri/src/widget_host/proxy.rs)."
+      }
+    ],
     "eslint/no-underscore-dangle": [
       "warn",
       {

@@ -16,28 +16,52 @@
 //! # The OS-capability matrix
 //! Which OS gets the proxy, and so where agent-made widgets may ever be turned on. They stay
 //! off on every OS in v0 ([`super::policy`]). Turning them on is the owner's call, once the
-//! isolation probe passes on that OS under `RLX_PROBE_STRICT=1`.
+//! isolation probe passes on that OS under `RLX_PROBE_STRICT=1`. Registration also checks
+//! this at run time ([`ensure_eligible`]): no agent-made widget registers on a machine
+//! without the running proxy, whatever the switch says.
 //!
 //! | OS | Widgets webview in v0 | Deny-all proxy | Agent-made widgets eligible |
 //! | --- | --- | --- | --- |
-//! | macOS 14+ | yes | yes, except loopback (the documented residual below): on the widgets webview's own non-persistent `WKWebsiteDataStore` (Tauri's `macos-proxy`) | yes, once the probe passes; its gate there is off-machine preconnect |
-//! | macOS 11-13 | yes, built-ins only | no: WebKit has no per-webview proxy before macOS 14 | no, never |
+//! | macOS 14+ | yes | yes, on the widgets webview's own non-persistent `WKWebsiteDataStore` (Tauri's `macos-proxy`), except the residual below | yes, once the probe passes, with the residual shown as a warning ([`Residual::LocalNetwork`]) |
+//! | macOS 11-13, or a version that can't be read | yes, built-ins only | no: WebKit has no per-webview proxy before macOS 14 | no, never |
 //! | Windows 10/11 (WebView2) | no; the probe attaches one | yes: the widgets webview's own WebView2 environment and user-data folder, with `--proxy-server` and `--proxy-bypass-list=<-loopback>` | once the product attaches a widgets webview there and the probe passes |
 //! | Linux (WebKitGTK) | no: WebKitGTK can't place a child webview | in code: an ephemeral web context with a custom proxy; untested, since nothing attaches | no |
 //!
 //! On macOS 11-13 the built-ins still render in the widgets webview without a proxy. That is
 //! why built-ins set connector text with `textContent` only ([`super::BUILTIN_HTML_SINKS`]).
+//! The macOS version comes from `NSProcessInfo`, the source wry uses. Under
+//! `SYSTEM_VERSION_COMPAT=1` it reads 10.16; that counts as unknown, so not eligible.
 //!
-//! What the proxy doesn't cover:
-//! - **Loopback on macOS**, a documented residual the owner accepted. Network.framework never
-//!   proxies loopback (`127.0.0.1`, `localhost`), with an HTTP or a SOCKS proxy alike, and
-//!   has no setting for it. So on macOS a widget's preconnect can still open an empty TCP
-//!   connection to a port on this machine, which only a local process sees. Off-machine names
-//!   and addresses do go to the proxy. The probe records loopback preconnect as info on
-//!   macOS and gates on off-machine preconnect there. Elsewhere loopback stays a gate:
-//!   WebView2 proxies it too, given `<-loopback>`.
-//! - **DNS** the engine resolves outside its proxy settings (a `dns-prefetch`, say). The
-//!   probe can't see it, so that channel is unmeasured.
+//! # What the proxy doesn't cover
+//! Measured by the isolation probe on macOS 27.2: each side (the host page and a widget
+//! frame) preconnects to every target over `http://` and `https://`, the proxy's test-build
+//! log names each `CONNECT` it refused, and a listener on this Mac's own addresses sees each
+//! direct connection (src/e2e/reach.rs). CI repeats it on every run, on macOS and Windows.
+//! - **macOS 14+: the local network (the owner-accepted residual, warned in the opt-in).**
+//!   Network.framework never sends these to a proxy, and has no setting for it:
+//!   - **this Mac**: `127.0.0.1`, `localhost`, `::1` and the Mac's own LAN address. An http
+//!     preconnect opens an empty TCP connection. An https one sends a standard TLS
+//!     ClientHello (4 connections per preconnect), with no SNI for an IP literal and SNI
+//!     `localhost` for `localhost`. Nothing page-controlled beyond the port and timing.
+//!   - **link-local IPv4 (169.254/16)**, off this Mac on the local network: a direct TCP
+//!     connect on the LAN interface (Network.framework's log shows the SYN, retried for
+//!     about 11 s). The page picks the address and the port. Nothing answered there in the
+//!     measurement; a device that did would get a ClientHello for https, as loopback does.
+//!
+//!   Everything else goes to the proxy, which refuses it: link-local IPv6 (`fe80::`), ULA
+//!   (`fd00::`), RFC 1918 addresses other than this Mac's (off-subnet, and a peer on its own
+//!   subnet), `.local` names, `*.localhost` names (so no page-chosen SNI reaches a local
+//!   port), TEST-NET addresses and external names. The probe gates on each of those, per side
+//!   and target, on macOS too.
+//! - **WebRTC, on every OS.** A proxy doesn't govern it. `frames.js` removes it from every
+//!   frame of the widgets webview. On Windows the widgets' WebView2 also gets
+//!   `--force-webrtc-ip-handling-policy=disable_non_proxied_udp`, so WebRTC there can only
+//!   go through the deny-all proxy; the probe checks it with `frames.js` skipped.
+//! - **DNS** the engine resolves outside its proxy settings (a `dns-prefetch`, say). On
+//!   macOS 27.2, mDNSResponder resolved none of the widgets' names behind the proxy, only
+//!   main's. CI measures it on every run: the probe's zone resolves through its own DNS
+//!   listener (`/etc/resolver` on macOS, an NRPT rule on Windows), and each side's names
+//!   must get 0 queries.
 
 use std::io;
 use std::net::{Ipv4Addr, TcpListener};
@@ -84,17 +108,44 @@ pub const MACOS_PROXY_MAJOR: u32 = 14;
 pub const fn support_for(os: Os) -> Support {
     match os {
         Os::MacOs(Some(major)) if major >= MACOS_PROXY_MAJOR => Support::DenyAll,
-        Os::MacOs(_) => Support::Unavailable("WebKit has no per-webview proxy before macOS 14"),
+        Os::MacOs(Some(10)) => Support::Unavailable(
+            "macOS reports 10.x (SYSTEM_VERSION_COMPAT), so its real version is unknown",
+        ),
+        Os::MacOs(Some(_)) => {
+            Support::Unavailable("WebKit has no per-webview proxy before macOS 14")
+        }
+        Os::MacOs(None) => Support::Unavailable("the macOS version couldn't be read"),
         Os::Windows | Os::Linux => Support::DenyAll,
+    }
+}
+
+/// What the deny-all proxy leaves open where it runs, as the isolation probe measured it (see
+/// the module docs). The UI shows it as a warning before anyone opts in to agent-made HTML
+/// widgets.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum Residual {
+    /// macOS 14+: a widget can still make the Mac open a TCP connection (and send a standard
+    /// TLS ClientHello, for https) to a port on this Mac, or to a link-local IPv4 address
+    /// (169.254/16) on the local network.
+    LocalNetwork,
+}
+
+/// The residual on `os`, where it has the proxy.
+pub const fn residual_for(os: Os) -> Option<Residual> {
+    match (os, support_for(os)) {
+        (Os::MacOs(_), Support::DenyAll) => Some(Residual::LocalNetwork),
+        _ => None,
     }
 }
 
 /// This machine's row of the matrix.
 pub fn support() -> Support {
-    support_for(this_os())
+    support_for(os())
 }
 
-fn this_os() -> Os {
+/// This machine's OS.
+pub fn os() -> Os {
     if cfg!(windows) {
         Os::Windows
     } else if cfg!(target_os = "macos") {
@@ -104,22 +155,43 @@ fn this_os() -> Os {
     }
 }
 
-/// macOS's major version, read from SystemVersion.plist: no process to spawn and no FFI.
+/// macOS's major version, from `NSProcessInfo`: the source wry uses for its own version
+/// checks, so the two never disagree.
+#[cfg(target_os = "macos")]
 fn macos_major() -> Option<u32> {
-    static MAJOR: OnceLock<Option<u32>> = OnceLock::new();
-    *MAJOR.get_or_init(|| {
-        std::fs::read_to_string("/System/Library/CoreServices/SystemVersion.plist")
-            .ok()
-            .and_then(|plist| product_major(&plist))
-    })
+    let version = objc2_foundation::NSProcessInfo::processInfo().operatingSystemVersion();
+    u32::try_from(version.majorVersion)
+        .ok()
+        .filter(|major| *major > 0)
 }
 
-/// The major version in a SystemVersion.plist's `ProductVersion`: 14 for `14.5`.
-pub fn product_major(plist: &str) -> Option<u32> {
-    let (_, after_key) = plist.split_once("<key>ProductVersion</key>")?;
-    let value = after_key.trim_start().strip_prefix("<string>")?;
-    let (version, _) = value.split_once("</string>")?;
-    version.split('.').next()?.trim().parse().ok()
+#[cfg(not(target_os = "macos"))]
+fn macos_major() -> Option<u32> {
+    None
+}
+
+/// Whether agent-made widgets may run on `os`: only behind the deny-all proxy, which must be
+/// running. Starts it if it hasn't started yet, and returns its port, or why not.
+pub fn ensure_eligible(os: Os) -> Result<u16, String> {
+    match support_for(os) {
+        Support::Unavailable(reason) => Err(reason.to_owned()),
+        Support::DenyAll => {
+            deny_all().map_err(|error| format!("the deny-all proxy couldn't start: {error}"))
+        }
+    }
+}
+
+/// [`ensure_eligible`] without starting the proxy, for the policy the UI shows. The proxy
+/// starts when the widgets webview attaches; until then it counts as able to start, unless
+/// it already failed.
+pub fn eligibility(os: Os) -> Result<(), String> {
+    match (support_for(os), PROXY.get()) {
+        (Support::Unavailable(reason), _) => Err(reason.to_owned()),
+        (Support::DenyAll, Some(Err(error))) => {
+            Err(format!("the deny-all proxy couldn't start: {error}"))
+        }
+        (Support::DenyAll, _) => Ok(()),
+    }
 }
 
 /// The proxy's port, once started, or why it couldn't start.
@@ -153,12 +225,14 @@ pub fn url(port: u16) -> Url {
 /// The WebView2 browser arguments of the widgets webview's own environment: wry's defaults
 /// plus the proxy. Chromium sends loopback hosts straight past any proxy unless
 /// `<-loopback>` removes that rule, and a page can name a loopback host as easily as any
-/// other. Main's arguments are never copied in, so its remote-debugging port (test builds)
-/// stays main's alone.
+/// other. WebRTC gets no UDP that bypasses the proxy, so it too can reach only the proxy
+/// (behind `frames.js`, which removes it). Main's arguments are never copied in, so its
+/// remote-debugging port (test builds) stays main's alone.
 pub fn webview2_args(port: u16) -> String {
     format!(
         "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection \
-         --proxy-server=http://127.0.0.1:{port} --proxy-bypass-list=<-loopback>"
+         --proxy-server=http://127.0.0.1:{port} --proxy-bypass-list=<-loopback> \
+         --force-webrtc-ip-handling-policy=disable_non_proxied_udp"
     )
 }
 
@@ -176,16 +250,78 @@ fn start(refused: &'static AtomicUsize) -> io::Result<u16> {
     Ok(port)
 }
 
-/// Accepts every connection and closes it unread, counting each one.
+/// Accepts every connection and closes it unread, counting each one. Test builds read what
+/// it asked for first ([`log`]), and still answer nothing.
 fn refuse_all(listener: &TcpListener, refused: &AtomicUsize) {
     for stream in listener.incoming() {
         match stream {
             Ok(stream) => {
-                drop(stream);
                 refused.fetch_add(1, Ordering::Relaxed);
+                #[cfg(feature = "e2e")]
+                e2e::record(stream);
+                #[cfg(not(feature = "e2e"))]
+                drop(stream);
             }
             // Out of descriptors, say: back off rather than spin.
             Err(_) => thread::sleep(Duration::from_millis(50)),
+        }
+    }
+}
+
+/// What each refused connection asked for, timestamped: `"<unix ms> <first line>"`, or
+/// `"<unix ms> no data"`. Test builds only: the probe matches a `CONNECT <authority>` (or an
+/// absolute-form request) to the preconnect that caused it.
+#[cfg(feature = "e2e")]
+pub fn log() -> Vec<String> {
+    e2e::LOG
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .clone()
+}
+
+#[cfg(feature = "e2e")]
+mod e2e {
+    use std::io::Read;
+    use std::net::TcpStream;
+    use std::sync::Mutex;
+    use std::thread;
+    use std::time::Duration;
+
+    pub static LOG: Mutex<Vec<String>> = Mutex::new(Vec::new());
+
+    /// Reads the first line on its own thread (so a silent connection holds up no other),
+    /// records it, and closes without a reply.
+    pub fn record(mut stream: TcpStream) {
+        let at = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis())
+            .unwrap_or_default();
+        let _ = thread::Builder::new()
+            .name("widgets-deny-all-proxy-e2e".into())
+            .spawn(move || {
+                let _ = stream.set_read_timeout(Some(Duration::from_millis(750)));
+                let mut buffer = [0u8; 1024];
+                let n = stream.read(&mut buffer).unwrap_or(0);
+                let line = first_line(&buffer[..n]);
+                LOG.lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .push(format!("{at} {line}"));
+            });
+    }
+
+    /// `"no data"`, the first line if it is text, or `"<n> bytes"`.
+    pub fn first_line(data: &[u8]) -> String {
+        if data.is_empty() {
+            return "no data".to_owned();
+        }
+        let line = data
+            .split(|b| *b == b'\r' || *b == b'\n')
+            .next()
+            .unwrap_or_default();
+        if !line.is_empty() && line.iter().all(|b| b.is_ascii_graphic() || *b == b' ') {
+            String::from_utf8_lossy(line).into_owned()
+        } else {
+            format!("{} bytes", data.len())
         }
     }
 }
@@ -201,11 +337,13 @@ mod tests {
     fn the_matrix() {
         assert_eq!(support_for(Os::MacOs(Some(14))), Support::DenyAll);
         assert_eq!(support_for(Os::MacOs(Some(26))), Support::DenyAll);
-        for old in [Some(11), Some(13), None] {
+        // 10 is what macOS 11+ reports under SYSTEM_VERSION_COMPAT=1.
+        for old in [Some(10), Some(11), Some(13), None] {
             assert!(
                 matches!(support_for(Os::MacOs(old)), Support::Unavailable(_)),
                 "{old:?}"
             );
+            assert_eq!(residual_for(Os::MacOs(old)), None);
         }
         assert_eq!(support_for(Os::Windows), Support::DenyAll);
         assert_eq!(support_for(Os::Linux), Support::DenyAll);
@@ -215,31 +353,50 @@ mod tests {
                 .describe()
                 .starts_with("unavailable: ")
         );
+        assert_eq!(
+            residual_for(Os::MacOs(Some(14))),
+            Some(Residual::LocalNetwork)
+        );
+        assert_eq!(residual_for(Os::Windows), None);
+        assert_eq!(
+            serde_json::to_value(Residual::LocalNetwork).unwrap(),
+            "local-network"
+        );
     }
 
     #[test]
-    fn reads_the_macos_major_version() {
-        let plist = |version: &str| {
-            format!(
-                "<?xml version=\"1.0\"?>\n<plist version=\"1.0\">\n<dict>\n\t<key>ProductName</key>\n\t<string>macOS</string>\n\t<key>ProductVersion</key>\n\t<string>{version}</string>\n</dict>\n</plist>\n"
-            )
-        };
-        assert_eq!(product_major(&plist("14.5")), Some(14));
-        assert_eq!(product_major(&plist("13.6.1")), Some(13));
-        assert_eq!(product_major(&plist("26")), Some(26));
-        assert_eq!(product_major(&plist("")), None);
-        assert_eq!(product_major("<dict></dict>"), None);
+    fn only_a_machine_with_the_proxy_is_eligible() {
+        for os in [Os::MacOs(Some(13)), Os::MacOs(Some(10)), Os::MacOs(None)] {
+            assert!(ensure_eligible(os).is_err(), "{os:?}");
+            assert!(eligibility(os).is_err(), "{os:?}");
+        }
+        let port = ensure_eligible(Os::MacOs(Some(14))).unwrap();
+        assert_eq!(running(), Some(port));
+        assert_eq!(eligibility(Os::MacOs(Some(14))), Ok(()));
+    }
+
+    #[test]
+    fn reads_the_macos_version_where_wry_does() {
         if cfg!(target_os = "macos") {
             assert!(macos_major().is_some_and(|major| major >= 11));
+            assert!(matches!(os(), Os::MacOs(Some(_))));
+        } else {
+            assert_eq!(macos_major(), None);
         }
     }
 
     #[test]
-    fn webview2_args_proxy_loopback_too() {
+    fn webview2_args_proxy_loopback_and_webrtc_too() {
         let args = webview2_args(4321);
-        assert!(args.contains("--proxy-server=http://127.0.0.1:4321"));
-        assert!(args.contains("--proxy-bypass-list=<-loopback>"));
-        assert!(!args.contains("remote-debugging"));
+        let args: Vec<&str> = args.split_whitespace().collect();
+        for arg in [
+            "--proxy-server=http://127.0.0.1:4321",
+            "--proxy-bypass-list=<-loopback>",
+            "--force-webrtc-ip-handling-policy=disable_non_proxied_udp",
+        ] {
+            assert!(args.contains(&arg), "{arg}");
+        }
+        assert!(!args.iter().any(|arg| arg.contains("remote-debugging")));
         assert_eq!(url(4321).as_str(), "http://127.0.0.1:4321/");
     }
 

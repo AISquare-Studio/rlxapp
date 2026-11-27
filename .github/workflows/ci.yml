@@ -159,6 +159,16 @@ jobs:
         if: hashFiles('src-tauri/Cargo.toml') != ''
         run: npm run tauri build -- --bundles ${{ matrix.bundles }}
 
+      # Network.framework's per-webview proxy symbols are macOS 14+, so build.rs weak-links it
+      # (src-tauri/src/widget_host/proxy.rs). A strong link would stop the app launching on
+      # macOS 11-13, so fail if anything makes it one.
+      - name: Network.framework stays weak-linked
+        if: runner.os == 'macOS' && hashFiles('src-tauri/Cargo.toml') != ''
+        run: |
+          kinds=$(otool -l "${{ matrix.binary }}" | awk '/^ *cmd LC_/ { cmd = $2 } / name .*\/Network\.framework\// { print cmd }' | sort -u)
+          echo "Network.framework load commands: ${kinds:-none}"
+          test "$kinds" = "LC_LOAD_WEAK_DYLIB"
+
       - name: Smoke test (xvfb)
         if: runner.os == 'Linux' && hashFiles('src-tauri/Cargo.toml') != ''
         run: xvfb-run --auto-servernum node scripts/smoke-test.mjs "${{ matrix.binary }}"
@@ -234,11 +244,32 @@ jobs:
           "TAURI_NATIVE_DRIVER=$driver" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           "### WebView2 $version, msedgedriver $((& $driver --version) -join ' ')" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
 
+      # The probe measures DNS (src-tauri/src/e2e/dns.rs): its own zone resolves through its
+      # DNS listener, so a widget's hostname looked up outside the deny-all proxy is seen, and
+      # main's names are the positive control. Windows' NRPT can only name port 53.
+      - name: Route the probe's DNS zone to its listener (macOS)
+        if: runner.os == 'macOS' && hashFiles('src-tauri/Cargo.toml') != ''
+        run: |
+          sudo mkdir -p /etc/resolver
+          printf 'nameserver 127.0.0.1\nport 53535\n' | sudo tee /etc/resolver/rlx-probe-dns.test
+          sudo killall -HUP mDNSResponder || true
+          scutil --dns | grep -B1 -A4 'rlx-probe-dns.test' || true
+          echo "RLXAPP_E2E_DNS_PORT=53535" >> "$GITHUB_ENV"
+
+      - name: Route the probe's DNS zone to its listener (Windows)
+        if: runner.os == 'Windows' && hashFiles('src-tauri/Cargo.toml') != ''
+        shell: pwsh
+        run: |
+          Add-DnsClientNrptRule -Namespace ".rlx-probe-dns.test" -NameServers "127.0.0.1"
+          Get-DnsClientNrptRule | Format-Table -AutoSize Namespace, NameServers
+          Clear-DnsClientCache
+          "RLXAPP_E2E_DNS_PORT=53" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
       # RLX_PROBE_STRICT=1 makes every gate check fail the run, whatever the agent-made widgets
       # switch says, so the widgets webview's network isolation (its deny-all proxy,
-      # src-tauri/src/widget_host/proxy.rs) must hold on every OS. On macOS, which never
-      # proxies loopback, the gate is off-machine preconnect and loopback is recorded as the
-      # documented residual.
+      # src-tauri/src/widget_host/proxy.rs) must hold on every OS: each side's preconnect to
+      # every target must reach only the proxy, and no widget name may be looked up. On macOS
+      # the owner-accepted residual (this Mac, and link-local IPv4) is recorded as info.
       - name: Native e2e (xvfb)
         if: runner.os == 'Linux' && hashFiles('src-tauri/Cargo.toml') != ''
         env:
@@ -250,6 +281,15 @@ jobs:
         env:
           RLX_PROBE_STRICT: "1"
         run: npm run e2e
+
+      # With frames.js's WebRTC removal skipped, WebView2's own WebRTC policy
+      # (disable_non_proxied_udp, src-tauri/src/widget_host/proxy.rs) must keep WebRTC to the
+      # deny-all proxy alone. macOS has no such policy, so frames.js is all there is there.
+      - name: Native e2e, WebRTC kept (Windows)
+        if: runner.os == 'Windows' && hashFiles('src-tauri/Cargo.toml') != ''
+        env:
+          RLX_PROBE_STRICT: "1"
+        run: node e2e/native/probe.mjs --rtc-kept
 
       - name: Upload e2e screenshots and probe results
         if: always() && hashFiles('src-tauri/Cargo.toml') != ''

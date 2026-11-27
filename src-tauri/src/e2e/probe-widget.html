@@ -16,6 +16,7 @@
     const CHANNEL_FETCH = "__RLX_PROBE_CHANNEL_FETCH__";
     const LISTENER = "http://127.0.0.1:" + PORT;
     const FROM = "widget-iframe";
+    const REACH = __RLX_PROBE_REACH__;
     const status = document.getElementById("status");
     const sleep = (ms) => new Promise((done) => setTimeout(done, ms));
     const errorText = (error) => (error && (error.message || error.name)) || String(error);
@@ -169,6 +170,9 @@
         return event(source, "onopen", "onerror").finally(() => source.close());
       });
       await attempt("beacon", () => navigator.sendBeacon(tag("beacon"), "x"));
+      await attempt("keepalive", () =>
+        fetch(tag("keepalive"), { method: "POST", body: "x", keepalive: true, mode: "no-cors" }).then(() => "resolved", (e) => "rejected " + errorText(e)),
+      );
       await attempt("img", () => {
         const img = new Image();
         const result = event(img, "onload", "onerror");
@@ -185,21 +189,17 @@
           return "added";
         });
       }
-      // Off the machine: an external canary name (.invalid never resolves) and a TEST-NET
-      // IP. Behind the deny-all proxy they reach only the proxy, which refuses them.
-      await attempt("off-machine", () => {
-        for (const [rel, href] of [
-          ["preconnect", "http://" + FROM + ".rlx-probe-canary.invalid/preconnect"],
-          ["dns-prefetch", "http://" + FROM + "-dns.rlx-probe-canary.invalid/"],
-          ["preconnect", "http://198.51.100.7/" + FROM + "/preconnect"],
-        ]) {
-          const link = document.createElement("link");
-          link.rel = rel;
-          link.href = href;
-          document.head.append(link);
-        }
-        return "added";
-      });
+      // Reach (src/e2e/reach.rs): one link at a time, over http and https, so a direct
+      // connection lines up with its attempt and the proxy's CONNECT log names each one.
+      report.reach = [];
+      for (const target of REACH) {
+        const link = document.createElement("link");
+        link.rel = target.rel;
+        link.href = target.url;
+        report.reach.push(Object.assign({}, target, { at: Date.now() }));
+        document.head.append(link);
+        await sleep(250);
+      }
       // Subresources CSP must stop: CSS url(), @import and @font-face, and SVG <image>.
       await attempt("css-url", () => {
         const div = document.createElement("div");
@@ -280,7 +280,11 @@
       return { siblings: window.parent.frames.length - 1, answered };
     }
 
+    let navigating = false;
     function navigate() {
+      // The host asks until it hears back; navigate once.
+      if (navigating) return;
+      navigating = true;
       const tag = (kind) => LISTENER + "/" + FROM + "/" + kind;
       // Positive control: tell the host this step really runs, so a fixture that stops
       // navigating can't pass the "blocked" checks by doing nothing.
@@ -326,6 +330,16 @@
         location.href = tag("navigate");
       }, 300);
     }
+
+    // A beacon as this frame goes away (the core reloads the host page): it must reach
+    // nothing either.
+    window.addEventListener("pagehide", () => {
+      try {
+        navigator.sendBeacon(LISTENER + "/" + FROM + "/pagehide-beacon", "x");
+      } catch (error) {
+        // blocked, as expected
+      }
+    });
 
     window.addEventListener("message", (event) => {
       if (event.source !== window.parent || !event.data) return;

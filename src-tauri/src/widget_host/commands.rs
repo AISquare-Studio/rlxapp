@@ -43,7 +43,7 @@ pub fn widgets_policy<R: Runtime>(
     registry: tauri::State<'_, Registry>,
 ) -> Result<PolicyInfo, String> {
     from_main(&webview)?;
-    Ok(registry.policy().into())
+    Ok(registry.info())
 }
 
 /// Async, and off the async runtime's threads: `add_child` waits on the main thread, which

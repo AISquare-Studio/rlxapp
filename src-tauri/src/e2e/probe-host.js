@@ -156,6 +156,9 @@
       return event(source, "onopen", "onerror").finally(() => source.close());
     });
     await attempt("beacon", () => navigator.sendBeacon(tag("beacon"), "x"));
+    await attempt("keepalive", () =>
+      fetch(tag("keepalive"), { method: "POST", body: "x", keepalive: true, mode: "no-cors" }).then(() => "resolved", (e) => `rejected ${errorText(e)}`),
+    );
     await attempt("img", () => {
       const img = new Image();
       const result = event(img, "onload", "onerror");
@@ -172,21 +175,6 @@
         return "added";
       });
     }
-    // Off the machine: an external canary name (.invalid never resolves) and a TEST-NET IP.
-    // Behind the deny-all proxy they reach only the proxy, which counts and refuses them.
-    await attempt("off-machine", () => {
-      for (const [rel, href] of [
-        ["preconnect", `http://${FROM}.rlx-probe-canary.invalid/preconnect`],
-        ["dns-prefetch", `http://${FROM}-dns.rlx-probe-canary.invalid/`],
-        ["preconnect", `http://198.51.100.7/${FROM}/preconnect`],
-      ]) {
-        const link = document.createElement("link");
-        link.rel = rel;
-        link.href = href;
-        document.head.append(link);
-      }
-      return "added";
-    });
     // Subresources CSP must stop: CSS url(), @import and @font-face, and SVG <image>.
     await attempt("css-url", () => {
       const div = document.createElement("div");
@@ -217,6 +205,21 @@
     });
 
     await attempt("rtc", () => rtc(CONFIG.port));
+  }
+
+  // Reach (src/e2e/reach.rs): one link at a time, over http and https, so a direct
+  // connection lines up with its attempt and the proxy's CONNECT log names each one. It runs
+  // after the fixture frame's own reach loop, so the two sides never overlap in time.
+  async function reach() {
+    report.reach = [];
+    for (const target of CONFIG.reach) {
+      const link = document.createElement("link");
+      link.rel = target.rel;
+      link.href = target.url;
+      report.reach.push({ ...target, at: Date.now() });
+      document.head.append(link);
+      await sleep(250);
+    }
   }
 
   async function rtc(port) {
@@ -256,6 +259,8 @@
     const deadline = Date.now() + 60_000;
     while (!report.iframe && Date.now() < deadline) await sleep(200);
     if (!report.iframe) report.errors.push("the fixture iframe never reported");
+    await sleep(1000);
+    await reach();
     await sleep(3000); // time for a (refused) agent-made widget to have run
     report.frames = [...document.querySelectorAll("iframe")].map((f) => ({
       id: f.dataset.widgetId,
@@ -264,6 +269,15 @@
     }));
     report.done = true;
   }
+
+  // A beacon as the page goes away (the core reloads it): it must reach nothing either.
+  window.addEventListener("pagehide", () => {
+    try {
+      navigator.sendBeacon(`${LISTENER}/${FROM}/pagehide-beacon`, "x");
+    } catch {
+      // blocked, as expected
+    }
+  });
 
   window.__rlxProbe = Object.freeze({
     report,
@@ -281,16 +295,31 @@
           report.navigation.ack = Array.isArray(event.data.urls) ? event.data.urls.map(String) : [];
         }
       });
-      const fixture = [...document.querySelectorAll("iframe")].find((f) => f.dataset.widgetId === CONFIG.fixture);
-      if (fixture && fixture.contentWindow) fixture.contentWindow.postMessage({ type: "e2e-navigate" }, "*");
-      setTimeout(() => {
+      // Ask until the fixture answers (for up to 20 s): after the reload its frame may not
+      // have loaded yet. Then this page navigates too.
+      const ask = () => {
+        const fixture = [...document.querySelectorAll("iframe")].find((f) => f.dataset.widgetId === CONFIG.fixture);
+        if (fixture && fixture.contentWindow) fixture.contentWindow.postMessage({ type: "e2e-navigate" }, "*");
+      };
+      const started = Date.now();
+      const leave = () => {
         try {
           window.open(`${LISTENER}/${FROM}/window-open`);
         } catch {
           // blocked, as expected
         }
         location.href = `${LISTENER}/${FROM}/navigate`;
-      }, 1500);
+      };
+      ask();
+      const asking = setInterval(() => {
+        if (report.navigation.ack || Date.now() - started > 20_000) {
+          clearInterval(asking);
+          if (!report.navigation.ack) report.navigation.gaveUp = true;
+          setTimeout(leave, 1500);
+        } else {
+          ask();
+        }
+      }, 250);
     },
   });
 

@@ -23,13 +23,23 @@
 //!    widget iframe. Then the core reloads the webview and checks that its replay restores
 //!    the grid.
 //! 4. In main: a control call of the canary, which must be recorded, an iframe that main's
-//!    CSP must block, and a preconnect that must reach the control listener: main isn't
-//!    behind the widgets webview's deny-all proxy.
+//!    CSP must block, a preconnect that must reach the control listener, and preconnects off
+//!    the machine that must never reach the widgets webview's deny-all proxy: main isn't
+//!    behind it.
+//! 5. Reach (reach.rs): each side preconnects to every class of destination, one at a time,
+//!    over http and https. The proxy's test-build log names what reached it; reach
+//!    listeners on this host's own addresses see what went past it; with `RLXAPP_E2E_DNS_PORT`
+//!    set, a DNS listener sees what was looked up (dns.rs).
+//!
+//! `RLXAPP_E2E_RTC=kept` skips frames.js's WebRTC removal, to check that the network setup
+//! alone keeps WebRTC in (Windows: WebView2's `disable_non_proxied_udp`).
 //!
 //! The canary command `e2e_canary` is granted to the main webview only, by a runtime
 //! capability below. Any call recorded from another webview means a widget ran a command.
 
+mod dns;
 mod listener;
+mod reach;
 
 use std::path::PathBuf;
 use std::sync::Mutex;
@@ -43,7 +53,7 @@ use tauri::webview::{PageLoadEvent, PageLoadPayload};
 use tauri::{AppHandle, Manager, Runtime, Webview};
 
 use crate::widget_host::state::{HostState, MountEntry, mount_now};
-use crate::widget_host::{self, Bounds, HostExtras, HostFn, PolicyInfo, Registry, Source};
+use crate::widget_host::{self, Bounds, HostExtras, HostFn, Registry, Source};
 use listener::Listener;
 
 /// Every navigation the widgets webview's guard was asked about, with its answer. wry asks
@@ -58,6 +68,15 @@ pub fn record_navigation(url: &str, allowed: bool) {
 
 /// Names the file the report is written to. Unset, the probe doesn't run.
 pub const ENV_REPORT: &str = "RLXAPP_E2E_REPORT";
+
+/// `kept`: the widgets webview keeps WebRTC (frames.js is skipped), to check what its network
+/// setup alone does with it.
+pub const ENV_RTC: &str = "RLXAPP_E2E_RTC";
+
+/// Whether this run keeps WebRTC in the widgets webview ([`ENV_RTC`]).
+pub fn keeps_webrtc() -> bool {
+    std::env::var(ENV_RTC).is_ok_and(|value| value == "kept")
+}
 
 /// Tauri exempts its channel fetch from the ACL (it reads only the caller's own queue), so
 /// the probe calls and records it but asserts nothing about it.
@@ -153,10 +172,49 @@ impl Probe {
             return inert;
         };
 
+        let lan = reach::lan_address();
+        let (reach_host, reach_host_tls, bound_host) =
+            Listener::start_reach("reach-host", lan).expect("bind the host reach listener");
+        let (reach_iframe, reach_iframe_tls, bound_iframe) =
+            Listener::start_reach("reach-iframe", lan).expect("bind the iframe reach listener");
+        // The DNS listener, where CI routes the probe's zone to it.
+        let (dns, dns_error) = match dns::port_from_env() {
+            Some(port) => match dns::DnsListener::start(port) {
+                Ok(listener) => (Some(listener), None),
+                Err(error) => (None, Some(format!("127.0.0.1:{port}: {error}"))),
+            },
+            None => (None, None),
+        };
+        let zone = dns.is_some();
+        // Main preconnects off the machine only where a widgets webview (and so the proxy)
+        // can be checked: macOS, and Windows, where the probe attaches one.
+        let main_plan = if cfg!(any(target_os = "macos", windows)) {
+            reach::plan(2, [0, 0], lan, zone)
+        } else {
+            Vec::new()
+        };
+        let plans = [
+            reach::plan(0, [reach_host.port, reach_host_tls], lan, zone),
+            reach::plan(1, [reach_iframe.port, reach_iframe_tls], lan, zone),
+            main_plan,
+        ];
+        let reach = json!({
+            "lan": lan.map(|ip| ip.to_string()),
+            "bound": { "widgets-host": bound_host, "widget-iframe": bound_iframe },
+            "plans": {
+                "widgets-host": plans[0],
+                "widget-iframe": plans[1],
+                "main": plans[2],
+            },
+        });
         let listeners = Listeners {
             host: Listener::start("host").expect("bind the host listener"),
             iframe: Listener::start("iframe").expect("bind the iframe listener"),
             control: Listener::start("control").expect("bind the control listener"),
+            reach_host,
+            reach_iframe,
+            dns,
+            dns_error,
         };
         let self_tests = [
             listeners.host.self_test(),
@@ -171,6 +229,7 @@ impl Probe {
             "fixture": FIXTURE_ID,
             "builtin": BUILTIN_ID,
             "agent": AGENT_ID,
+            "reach": plans[0],
         });
         let (loaded_tx, loaded_rx) = mpsc::channel();
         Self {
@@ -180,6 +239,7 @@ impl Probe {
                 listeners,
                 self_tests,
                 commands,
+                reach,
                 loaded: loaded_rx,
             })),
             loaded: Mutex::new(Some(loaded_tx)),
@@ -257,6 +317,13 @@ struct Listeners {
     host: Listener,
     iframe: Listener,
     control: Listener,
+    /// The on-host reach targets of each side (reach.rs).
+    reach_host: Listener,
+    reach_iframe: Listener,
+    /// The DNS listener (dns.rs), where CI routes the probe's zone to it, or why it couldn't
+    /// start.
+    dns: Option<dns::DnsListener>,
+    dns_error: Option<String>,
 }
 
 struct Run {
@@ -264,6 +331,8 @@ struct Run {
     listeners: Listeners,
     self_tests: [bool; 3],
     commands: Vec<String>,
+    /// The reach plans and where the reach listeners bound (reach.rs).
+    reach: Value,
     loaded: Receiver<()>,
 }
 
@@ -339,7 +408,11 @@ impl Run {
                 "__RLX_PROBE_COMMANDS__",
                 &serde_json::to_string(&self.commands).unwrap_or_default(),
             )
-            .replace("__RLX_PROBE_CHANNEL_FETCH__", CHANNEL_FETCH);
+            .replace("__RLX_PROBE_CHANNEL_FETCH__", CHANNEL_FETCH)
+            .replace(
+                "__RLX_PROBE_REACH__",
+                &self.reach["plans"]["widget-iframe"].to_string(),
+            );
         let mut fixtures = "not registered: no widget webview on this OS".to_owned();
         if widgets.is_some() {
             fixtures = describe(registry.register_probe_fixture(
@@ -374,6 +447,10 @@ impl Run {
             .replace(
                 "__RLX_ACTION_URL__",
                 &format!("{}/host/action", widget_host::origin()),
+            )
+            .replace(
+                "__RLX_MAIN_REACH__",
+                &self.reach["plans"]["main"].to_string(),
             );
         if let Some(main) = &main
             && let Err(error) = main.eval(main_script)
@@ -448,9 +525,12 @@ impl Run {
                 "loadsAfter": host_state.loads(),
                 "frames": frames_after,
             });
-            // Let the reloaded probe page settle before the last step.
-            let ready = "typeof window.__rlxProbe === 'object'";
-            let _ = wait_for(widgets, ready, Duration::from_secs(30));
+            // Let the reloaded probe page finish its own run (it runs the probe again) before
+            // the last step, so the navigation step meets a settled fixture.
+            let ready = "window.__rlxProbe && window.__rlxProbe.report.done === true";
+            if wait_for(widgets, ready, Duration::from_secs(150)).is_none() {
+                errors.push("the reloaded host probe never finished".into());
+            }
             frames_before_nav = eval_value(
                 widgets,
                 "document.querySelectorAll('iframe').length",
@@ -458,8 +538,11 @@ impl Run {
             )
             .unwrap_or(Value::Null);
 
-            // Navigation goes last: if it isn't blocked, the page is gone.
+            // Navigation goes last: if it isn't blocked, the page is gone. The host page asks
+            // the fixture until it acks (bounded), then navigates itself.
             let _ = widgets.eval("window.__rlxProbe.navigate()");
+            let asked = "window.__rlxProbe && window.__rlxProbe.report.navigation && (window.__rlxProbe.report.navigation.ack || window.__rlxProbe.report.navigation.gaveUp) ? true : false";
+            let _ = wait_for(widgets, asked, Duration::from_secs(30));
             thread::sleep(Duration::from_secs(5));
             let after = "JSON.stringify({ href: location.href, frames: document.querySelectorAll('iframe').length, navigation: window.__rlxProbe ? window.__rlxProbe.report.navigation : null })";
             host_after_nav = eval_value(widgets, after, Duration::from_secs(5))
@@ -490,18 +573,27 @@ impl Run {
         let listener = |name: &str, l: &Listener, self_test: bool| json!({ "name": name, "port": l.port, "selfTest": self_test, "hits": l.hits() });
 
         let report = json!({
-            "schema": 4,
+            "schema": 5,
             "os": std::env::consts::OS,
             "arch": std::env::consts::ARCH,
             "elapsedMs": started.elapsed().as_millis() as u64,
-            "policy": PolicyInfo::from(policy),
+            "policy": registry.info(),
             // The widgets webview's deny-all proxy: this OS's row of the matrix, its port
             // (set once a widgets webview attached behind it) and what it refused.
             "proxy": {
                 "support": widget_host::proxy::support().describe(),
                 "port": widget_host::proxy::running(),
                 "refused": widget_host::proxy::refused(),
+                "log": widget_host::proxy::log(),
             },
+            "reach": self.reach,
+            // The DNS listener (dns.rs): null where CI didn't route the probe's zone to it.
+            "dns": match (&self.listeners.dns, &self.listeners.dns_error) {
+                (Some(dns), _) => json!({ "zone": dns::ZONE, "port": dns.port, "queries": dns.queries() }),
+                (None, Some(error)) => json!({ "zone": dns::ZONE, "error": error }),
+                (None, None) => Value::Null,
+            },
+            "webrtc": if keeps_webrtc() { "kept for the probe (RLXAPP_E2E_RTC=kept)" } else { "removed (frames.js)" },
             "switch": {
                 "agentRegister": agent_register,
                 "builtinRegister": builtin_register,
@@ -527,6 +619,8 @@ impl Run {
                 "host": listener("host", &self.listeners.host, self.self_tests[0]),
                 "iframe": listener("iframe", &self.listeners.iframe, self.self_tests[1]),
                 "control": listener("control", &self.listeners.control, self.self_tests[2]),
+                "reachHost": listener("reach-host", &self.listeners.reach_host, true),
+                "reachIframe": listener("reach-iframe", &self.listeners.reach_iframe, true),
             },
             "errors": errors,
         });
@@ -618,6 +712,7 @@ mod tests {
             "__RLX_PROBE_PORT__",
             "__RLX_PROBE_COMMANDS__",
             "__RLX_PROBE_CHANNEL_FETCH__",
+            "__RLX_PROBE_REACH__",
         ] {
             assert!(PROBE_WIDGET_HTML.contains(placeholder), "{placeholder}");
         }
@@ -625,6 +720,7 @@ mod tests {
             "__RLX_CONTROL_PORT__",
             "__RLX_WIDGET_URL__",
             "__RLX_ACTION_URL__",
+            "__RLX_MAIN_REACH__",
         ] {
             assert!(MAIN_CONTROL_JS.contains(placeholder), "{placeholder}");
         }
