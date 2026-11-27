@@ -1,8 +1,9 @@
 import { useEffect, useState, type ReactNode } from "react";
+import { GMAIL, SLACK } from "../core/connectors.ts";
+import type { NewDraft } from "../core/types.ts";
 import type { Feed, FeedItem, GmailDashboard } from "../engine/fake/data.ts";
 import { useEngineData, useNow } from "../engine/hooks.ts";
 import { useApp } from "../state/context.ts";
-import type { Draft } from "../state/model.ts";
 import { Icon } from "../ui/Icon.tsx";
 import { MoreMenu } from "../ui/MoreMenu.tsx";
 import type { GenericManifest } from "./manifest.ts";
@@ -13,17 +14,11 @@ function ago(now: number, then: number | null): string {
   return min < 1 ? "checked just now" : `checked ${min} min ago`;
 }
 
-let draftCounter = 0;
-function draftId(): string {
-  draftCounter += 1;
-  return `d-${Date.now().toString(36)}-${draftCounter}`;
-}
-
 /** A Draft for the owner to approve; widget and data-job drafts always need the owner. */
 function useCreateDraft() {
-  const { dispatch, toast, now, state } = useApp();
-  return (draft: Omit<Draft, "id" | "createdAt" | "status">) => {
-    dispatch({ type: "draft-create", draft: { ...draft, status: "pending", id: draftId(), createdAt: now() } });
+  const { core, toast, state } = useApp();
+  return (draft: NewDraft) => {
+    core.createDraft(draft);
     toast(`Draft saved for your approval. ${state.settings.agentName} won't send it until you approve.`, "success");
   };
 }
@@ -54,12 +49,12 @@ function FeedRow({ item, action }: { item: FeedItem; action?: ReactNode }) {
 }
 
 export function SlackDigestWidget({ settingsOpen }: { settingsOpen: boolean }) {
-  const { state, updateSettings, dispatch, demo } = useApp();
+  const { state, updateSettings, core, demo } = useApp();
   const interval = state.settings.slackIntervalMin;
   const { data, status, fetchedAt, refresh } = useEngineData<Feed>(
     "widget_refresh",
     `Slack: what needs ${state.settings.ownerName}, across DMs, mentions, threads and channels`,
-    { kind: "connectors", connectors: ["claude.ai Slack"] },
+    { kind: "connectors", connectors: [SLACK] },
     interval,
   );
   const now = useNow(30_000);
@@ -69,8 +64,8 @@ export function SlackDigestWidget({ settingsOpen }: { settingsOpen: boolean }) {
   useEffect(() => {
     if (fetchedAt === null || reviewed === undefined) return;
     const outcome = reviewed > 0 ? `Claude reviewed ${reviewed} new` : "Fetched, nothing new, no Claude usage";
-    dispatch({ type: "agent-update", id: "slack-agent", patch: { lastRun: { at: fetchedAt, outcome, modelTurn: reviewed > 0 } } });
-  }, [fetchedAt, reviewed, dispatch]);
+    core.recordAgentRun("slack-agent", { at: fetchedAt, outcome, modelTurn: reviewed > 0 });
+  }, [fetchedAt, reviewed, core]);
   return (
     <div className="feed">
       <div className="widget__meta-row">
@@ -140,7 +135,7 @@ export function SlackDigestWidget({ settingsOpen }: { settingsOpen: boolean }) {
                       onClick={() =>
                         createDraft({
                           origin: "widget",
-                          connector: "claude.ai Slack",
+                          connector: SLACK,
                           destination: item.subtitle ?? "Slack",
                           body: `Thanks, I'm on it. I'll follow up shortly.`,
                           context: `Reply to: ${item.title}`,
@@ -186,7 +181,7 @@ export function GmailWidget({ settingsOpen }: { settingsOpen: boolean }) {
   const { data } = useEngineData<GmailDashboard>(
     "widget_refresh",
     "Gmail: needs a reply, important unread, key senders, a daily digest and today's meetings",
-    { kind: "connectors", connectors: ["claude.ai Gmail"] },
+    { kind: "connectors", connectors: [GMAIL] },
     15,
   );
   const createDraft = useCreateDraft();
@@ -213,7 +208,7 @@ export function GmailWidget({ settingsOpen }: { settingsOpen: boolean }) {
                 onClick={() =>
                   createDraft({
                     origin: "widget",
-                    connector: "claude.ai Gmail",
+                    connector: GMAIL,
                     destination: m.from,
                     subject: `Re: ${m.subject}`,
                     body: `Hi ${m.from.split(" ")[0]}, thanks for this. I'll review it today and come back to you.`,
@@ -294,7 +289,7 @@ export function GmailWidget({ settingsOpen }: { settingsOpen: boolean }) {
                 onClick={() =>
                   createDraft({
                     origin: "dataJob",
-                    connector: "claude.ai Gmail",
+                    connector: GMAIL,
                     destination: d.to,
                     subject: d.subject,
                     body: d.body,

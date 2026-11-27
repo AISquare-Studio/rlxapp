@@ -50,10 +50,10 @@ describe("rlx logo", () => {
 describe("onboarding brand header", () => {
   it("shows the r\\x mark in a <header>, as the native screen check (e2e/native) looks for on a fresh launch", async () => {
     const { App } = await import("../App.tsx");
-    const { FakeEngine } = await import("../engine/fake/FakeEngine.ts");
+    const { fakeServices } = await import("../test/fakeServices.ts");
     const { browserPlatform } = await import("../platform/index.ts");
     const { DEFAULT_SETTINGS } = await import("../state/model.ts");
-    const view = render(<App platform={browserPlatform} engine={new FakeEngine({ seed: false })} initialSettings={{ ...DEFAULT_SETTINGS }} />);
+    const view = render(<App platform={browserPlatform} {...fakeServices({ seed: false, stepMs: 1400, settings: { ...DEFAULT_SETTINGS } })} />);
     await view.findByRole("button", { name: "Get started" });
     const mark = document.querySelector('header svg[aria-label="rlx"]');
     expect([...(mark?.querySelectorAll("path") ?? [])].map((p) => p.getAttribute("d"))).toEqual(LOGO_PATHS);

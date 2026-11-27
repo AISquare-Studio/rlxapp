@@ -2,11 +2,11 @@ import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { App } from "../App.tsx";
-import { FakeEngine } from "../engine/fake/FakeEngine.ts";
 import { browserPlatform, type Platform, type WidgetSource } from "../platform/index.ts";
 import { WidgetHost } from "../platform/widgetHost.ts";
 import { AppProvider } from "../state/AppProvider.tsx";
 import { DEFAULT_SETTINGS } from "../state/model.ts";
+import { fakeServices } from "../test/fakeServices.ts";
 import { AgentFrame, AGENT_WIDGET_SANDBOX } from "./AgentWidget.tsx";
 import { withColorScheme } from "./colorScheme.ts";
 import { GmailWidget, SlackDigestWidget } from "./ConnectorWidgets.tsx";
@@ -14,9 +14,9 @@ import { ClockWidget, PomodoroWidget, TimerWidget } from "./TimeWidgets.tsx";
 
 const settings = { ...DEFAULT_SETTINGS, onboarded: true };
 
-function wrap(children: ReactNode, engine = new FakeEngine({ stepMs: 20, seed: false })) {
+function wrap(children: ReactNode, services = fakeServices({ settings, stepMs: 20, seed: false })) {
   return render(
-    <AppProvider engine={engine} developer={engine} platform={browserPlatform} initialSettings={settings}>
+    <AppProvider {...services} platform={browserPlatform}>
       {children}
     </AppProvider>,
   );
@@ -137,8 +137,9 @@ describe("Gmail dashboard", () => {
   });
 
   it("refreshes silently with no model turn, and takes one only when something is new", async () => {
-    const engine = new FakeEngine({ stepMs: 20, seed: false });
-    wrap(<SlackDigestWidget settingsOpen={false} />, engine);
+    const services = fakeServices({ settings, stepMs: 20, seed: false });
+    const { engine } = services;
+    wrap(<SlackDigestWidget settingsOpen={false} />, services);
     const turn = () => screen.getByTestId("slack-turn").textContent;
     const refreshNow = () => {
       fireEvent.click(screen.getByRole("button", { name: "More actions for Slack digest" }));
@@ -158,7 +159,7 @@ describe("Gmail dashboard", () => {
   });
 
   it("creates a draft from Draft reply that shows up in Approvals with the sign-off", async () => {
-    render(<App platform={browserPlatform} engine={new FakeEngine({ stepMs: 20, seed: false })} initialSettings={settings} />);
+    render(<App platform={browserPlatform} {...fakeServices({ settings, stepMs: 20, seed: false })} />);
     const gmail = await screen.findByRole("region", { name: "Gmail" });
     const needsReply = await within(gmail).findByRole("region", { name: "Needs a reply" });
     // Calm: the section is one line until opened; its items and their actions are inside.
@@ -200,7 +201,7 @@ describe("agent-made widget", () => {
 
 describe("Home", () => {
   it("adds, reorders and removes widgets", async () => {
-    render(<App platform={browserPlatform} engine={new FakeEngine({ stepMs: 20, seed: false })} initialSettings={settings} />);
+    render(<App platform={browserPlatform} {...fakeServices({ settings, stepMs: 20, seed: false })} />);
     await screen.findByRole("heading", { level: 1, name: "Home" });
     const count = () => document.querySelectorAll(".widget").length;
     const before = count();
@@ -219,7 +220,7 @@ describe("Home", () => {
   });
 
   it("renders the generic per-connector widget from its manifest and gives every control a name", async () => {
-    render(<App platform={browserPlatform} engine={new FakeEngine({ stepMs: 20, seed: false })} initialSettings={settings} />);
+    render(<App platform={browserPlatform} {...fakeServices({ settings, stepMs: 20, seed: false })} />);
     const linear = await screen.findByRole("region", { name: "Linear" });
     expect(await within(linear).findByTestId("generic-widget")).toBeTruthy();
     for (const button of screen.getAllByRole("button")) {
@@ -249,7 +250,7 @@ describe("agent-made widget tile in the app (widget host)", () => {
 
   it("shows a calm off state, with the policy's reason behind a fold, while agent-made widgets are off", async () => {
     const platform = nativeLike({ off: "off on macOS until the isolation probe passes there" }, []);
-    render(<App platform={platform} engine={new FakeEngine({ stepMs: 20, seed: false })} initialSettings={settings} />);
+    render(<App platform={platform} {...fakeServices({ settings, stepMs: 20, seed: false })} />);
     const tile = await screen.findByRole("region", { name: "Open pull requests" });
     expect(await within(tile).findByText("Agent-made widgets are off here for now.")).toBeTruthy();
     expect(within(tile).getByTestId("agent-widget-off-reason").textContent).toBe(
@@ -263,7 +264,7 @@ describe("agent-made widget tile in the app (widget host)", () => {
     const platform = nativeLike({ host: { id: "w-prs", version: 1 } }, calls);
     const rect = vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockReturnValue(DOMRect.fromRect({ x: 360, y: 400, width: 280, height: 200 }));
     try {
-      render(<App platform={platform} engine={new FakeEngine({ stepMs: 20, seed: false })} initialSettings={settings} />);
+      render(<App platform={platform} {...fakeServices({ settings, stepMs: 20, seed: false })} />);
       await screen.findByTestId("agent-widget-host-slot");
       await vi.waitFor(() => expect(calls).toContain("push w-prs"));
       expect(calls.slice(0, 2)).toEqual(["show 280x200", "mount w-prs@1"]);

@@ -39,7 +39,7 @@ test("C, D, E: create Start of day with the manager, Simulate 9:00, then the dra
   await proposal.getByRole("button", { name: "Remove Gmail" }).click();
   await proposal.getByLabel("Add a connector").selectOption("Gmail");
   await proposal.getByRole("button", { name: "Confirm" }).click();
-  await expect(page.getByText(/Start of day is scheduled for weekdays at 09:00/)).toBeVisible();
+  await expect(page.getByTestId("messages").getByText(/Start of day is scheduled for weekdays at 09:00/)).toBeVisible();
   await expect(page.getByRole("list", { name: "Agent channels" }).getByRole("button", { name: "Start of day, Scheduled 09:00" })).toBeVisible();
 
   await page.getByRole("button", { name: "Dashboard" }).click();

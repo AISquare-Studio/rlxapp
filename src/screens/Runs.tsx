@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { GMAIL, SLACK } from "../core/connectors.ts";
 import { newRunId, useRunEvents, useRuns } from "../engine/hooks.ts";
 import { STATE_LABEL, taskRuns } from "../engine/runs.ts";
 import type { RunState } from "../engine/types.ts";
@@ -30,7 +31,7 @@ function RunOverview() {
       id: newRunId(),
       kind: "task",
       prompt: title,
-      mount: { kind: "connectors", connectors: ["claude.ai Slack", "claude.ai Gmail"] },
+      mount: { kind: "connectors", connectors: [SLACK, GMAIL] },
       needsConnectors: [],
       persist: true,
     });

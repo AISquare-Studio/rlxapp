@@ -1,19 +1,21 @@
+import { connectorLabel, type ConnectorId } from "../core/connectors.ts";
+
 export interface GenericManifest {
   schemaVersion: 1;
   id: string;
   version: number;
   title: string;
   source: "builtin" | "agent" | "user";
-  data: { connector: string; tools: string[]; prompt: string; every: { minutes: number } };
+  data: { connector: ConnectorId; tools: string[]; prompt: string; every: { minutes: number } };
 }
 
 /** A generic per-connector widget, rendered from a manifest and the shared Feed schema (architecture §5.5). */
-export function genericManifest(connector: string): GenericManifest {
+export function genericManifest(connector: ConnectorId): GenericManifest {
   return {
     schemaVersion: 1,
     id: "generic-connector",
     version: 1,
-    title: connector.replace(/^claude\.ai /, ""),
+    title: connectorLabel(connector),
     source: "builtin",
     data: {
       connector,

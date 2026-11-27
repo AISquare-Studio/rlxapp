@@ -1,15 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { newRunId } from "../core/ids.ts";
 import { useApp } from "../state/context.ts";
 import type { HostSettings, Mount, RunEvent, RunKind, RunSummary, Seq } from "./types.ts";
 
-let runCounter = 0;
-
-/** A run id the core chooses (and Claude Code's --session-id). */
-export function newRunId(): string {
-  runCounter += 1;
-  const random = globalThis.crypto?.randomUUID?.() ?? `${Date.now().toString(16)}-${runCounter}`;
-  return random;
-}
+export { newRunId } from "../core/ids.ts";
 
 /** Every run the engine knows, re-read whenever one changes. */
 export function useRuns(): RunSummary[] {
@@ -134,29 +128,12 @@ export function useEngineData<T>(kind: RunKind, prompt: string, mount: Mount, ev
 }
 
 /**
- * This host's settings from the engine (rlxd's settings API), kept live: a change from any
- * client shows here. `update` writes through the engine; nothing is stored in the app.
+ * The rlx service's settings (start at login, its tray icon), through the core, which reads and
+ * writes them with the engine (rlxd's settings API) and follows changes from any client.
+ * Nothing is stored in the app.
  */
 export function useHostSettings(): { settings: HostSettings | null; update: (patch: Partial<HostSettings>) => Promise<void> } {
-  const { engine } = useApp();
-  const [settings, setSettings] = useState<HostSettings | null>(null);
-  useEffect(() => {
-    let active = true;
-    engine
-      .hostSettings()
-      .then((next) => active && setSettings(next))
-      .catch((error: unknown) => console.error("hostSettings() failed", error));
-    const off = engine.onHostSettingsChanged((next) => active && setSettings(next));
-    return () => {
-      active = false;
-      off();
-    };
-  }, [engine]);
-  const update = useCallback(
-    async (patch: Partial<HostSettings>) => {
-      setSettings(await engine.updateHostSettings(patch));
-    },
-    [engine],
-  );
-  return { settings, update };
+  const { core, state } = useApp();
+  const update = useCallback((patch: Partial<HostSettings>) => core.updateServiceSettings(patch), [core]);
+  return { settings: state.service, update };
 }

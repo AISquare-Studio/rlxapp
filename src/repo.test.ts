@@ -50,3 +50,27 @@ describe("engine home", () => {
     expect(offenders).toEqual([]);
   });
 });
+
+describe("the core seam", () => {
+  it("builds the fakes only in the composition root: the UI compiles against Engine, DeveloperEngine, DemoControls and Core", () => {
+    const tsx = files.filter(([path]) => path.endsWith(".tsx"));
+    expect(tsx.filter(([, text]) => /\bFake(Engine|Core)\b/.test(text)).map(([path]) => path)).toEqual(["/src/main.tsx"]);
+  });
+
+  it("identifies runs by jobId and agentId, never by parsing a run's title or prompt", () => {
+    const parsing = /AGENT_PREFIX|CHAT_PREFIX|BRIEFING_ROLE|agentOfRun|\btitle\.(startsWith|endsWith|slice|split|indexOf|match)\(|\bprompt\.(startsWith|endsWith|slice|indexOf|includes)\(/;
+    const offenders = files.flatMap(([path, text]) =>
+      text
+        .split("\n")
+        .filter((line) => parsing.test(line))
+        .map((line) => `${path}: ${line.trim()}`),
+    );
+    expect(offenders).toEqual([]);
+  });
+
+  it("writes to this device's storage only through the device store", () => {
+    const writers = files.filter(([, text]) => /\.(setItem|removeItem)\(/.test(text)).map(([path]) => path);
+    expect(writers).toEqual(["/src/core/device.ts"]);
+  });
+});
+

@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import { connectorLabel } from "../core/connectors.ts";
 import { USER_CONNECTORS, scheduleLabel, type AgentOutput, type Schedule } from "../state/agents.ts";
 import type { Proposal } from "../state/model.ts";
 import { Icon } from "../ui/Icon.tsx";
@@ -39,11 +40,11 @@ export function AgentEditor({ value, onChange, idPrefix, fold = false }: { value
         <ul className="connector-chips" aria-label="Connectors">
           {value.connectors.map((c) => (
             <li key={c} className="connector-chip">
-              {c}
+              {connectorLabel(c)}
               <button
                 type="button"
                 className="chip__remove"
-                aria-label={`Remove ${c}`}
+                aria-label={`Remove ${connectorLabel(c)}`}
                 onClick={() => set({ connectors: value.connectors.filter((x) => x !== c) })}
               >
                 <Icon name="close" size={12} />
@@ -62,7 +63,7 @@ export function AgentEditor({ value, onChange, idPrefix, fold = false }: { value
               <option value="">Choose a connector…</option>
               {available.map((c) => (
                 <option key={c} value={c}>
-                  {c}
+                  {connectorLabel(c)}
                 </option>
               ))}
             </select>

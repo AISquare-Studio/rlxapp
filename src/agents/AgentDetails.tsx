@@ -1,7 +1,8 @@
 import { useState } from "react";
 import { AgentEditor } from "../chat/AgentEditor.tsx";
 import { useNow } from "../engine/hooks.ts";
-import { agentStatus, avatarFor, scheduleLabel, wakeLabel, type Agent, type AgentStatus } from "../state/agents.ts";
+import { connectorLabel } from "../core/connectors.ts";
+import { agentStatus, scheduleLabel, wakeLabel, type Agent, type AgentStatus } from "../state/agents.ts";
 import { useApp } from "../state/context.ts";
 import type { Proposal } from "../state/model.ts";
 import { Icon } from "../ui/Icon.tsx";
@@ -40,8 +41,8 @@ export function LastRun({ agent, now }: { agent: Agent; now: number }) {
 
 /** Wake now / Pause (Resume) / Edit. */
 export function AgentActions({ agent, compact, extra = [] }: { agent: Agent; compact?: boolean; extra?: MenuItem[] }) {
-  const { wake, setPaused, running, agents } = useAgents();
-  const { dispatch, toast } = useApp();
+  const { wake, setPaused, running } = useAgents();
+  const { core, toast } = useApp();
   const [editing, setEditing] = useState(false);
   const isRunning = running.has(agent.id);
   const size = compact ? " button--sm" : "";
@@ -63,7 +64,7 @@ export function AgentActions({ agent, compact, extra = [] }: { agent: Agent; com
           agent={agent}
           onClose={() => setEditing(false)}
           onSave={(next) => {
-            dispatch({ type: "agent-update", id: agent.id, patch: { ...next, avatar: avatarFor(next.name, agents.filter((a) => a.id !== agent.id)) } });
+            core.editAgent(agent.id, next);
             setEditing(false);
             toast(`Saved ${next.name}`, "success");
           }}
@@ -128,7 +129,7 @@ export function AgentDetails({ agent }: { agent: Agent }) {
           <ul className="connector-chips connector-chips--static">
             {agent.connectors.map((c) => (
               <li key={c} className="connector-chip">
-                {c}
+                {connectorLabel(c)}
               </li>
             ))}
           </ul>

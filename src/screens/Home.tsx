@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { useAgents } from "../agents/useAgents.ts";
 import { PriorityCard } from "../chat/Cards.tsx";
+import { LINEAR } from "../core/connectors.ts";
 import { useNow } from "../engine/hooks.ts";
 import { MANAGER_ID, agentStatus, scheduleLabel, wakeLabel } from "../state/agents.ts";
 import { useApp } from "../state/context.ts";
@@ -23,7 +24,7 @@ const CATALOG: { type: WidgetType; title: string; description: string; connector
   { type: "clock", title: "Clock", description: "Local time and date" },
   { type: "timer", title: "Timer", description: "A countdown with start, pause and reset" },
   { type: "pomodoro", title: "Pomodoro", description: "25-minute focus sessions with breaks" },
-  { type: "generic", title: "Linear", description: "A generic connector widget from a manifest", connector: "claude.ai Linear" },
+  { type: "generic", title: "Linear", description: "A generic connector widget from a manifest", connector: LINEAR },
   { type: "ask", title: "Ask your agent", description: "Ask your agent to make a new widget" },
 ];
 
@@ -42,7 +43,7 @@ function titleOf(widget: WidgetInstance, agentName: string): string {
     case "pomodoro":
       return "Pomodoro";
     case "generic":
-      return genericManifest(widget.connector ?? "claude.ai Linear").title;
+      return genericManifest(widget.connector ?? LINEAR).title;
     case "agent":
       return widget.title ?? "Agent-made widget";
     case "ask":
@@ -110,7 +111,7 @@ function StartOfDay() {
 }
 
 export function Home() {
-  const { state, dispatch, toast, platform } = useApp();
+  const { state, core, toast, platform } = useApp();
   const { widgets, agentName } = state.settings;
   // A modal, toast or notification over Home: the widget host's tiles hide (follow-up 7).
   const overlays = useOverlayCount();
@@ -129,7 +130,7 @@ export function Home() {
       return;
     }
     widgetCounter += 1;
-    dispatch({ type: "widget-add", widget: { id: `w-${type}-${Date.now().toString(36)}-${widgetCounter}`, type, connector } });
+    core.addWidget({ id: `w-${type}-${Date.now().toString(36)}-${widgetCounter}`, type, connector });
     setPicker(false);
     toast("Widget added", "success");
   };
@@ -161,7 +162,7 @@ export function Home() {
           const title = titleOf(widget, agentName);
           const settingsOpen = settingsFor === widget.id;
           const hasSettings = widget.type === "slack" || widget.type === "gmail";
-          const move = (to: number) => dispatch({ type: "widget-move", id: widget.id, to });
+          const move = (to: number) => core.moveWidget(widget.id, to);
           return (
             <WidgetCard
               key={widget.id}
@@ -171,8 +172,8 @@ export function Home() {
               count={widgets.length}
               tall={widget.type === "slack"}
               onMove={move}
-              onRemove={() => dispatch({ type: "widget-remove", id: widget.id })}
-              onDropWidget={(dragged) => dispatch({ type: "widget-move", id: dragged, to: index })}
+              onRemove={() => core.removeWidget(widget.id)}
+              onDropWidget={(dragged) => core.moveWidget(dragged, index)}
               actions={
                 hasSettings ? (
                   <button
@@ -192,7 +193,7 @@ export function Home() {
               {widget.type === "clock" ? <ClockWidget /> : null}
               {widget.type === "timer" ? <TimerWidget /> : null}
               {widget.type === "pomodoro" ? <PomodoroWidget /> : null}
-              {widget.type === "generic" ? <GenericConnectorWidget manifest={genericManifest(widget.connector ?? "claude.ai Linear")} /> : null}
+              {widget.type === "generic" ? <GenericConnectorWidget manifest={genericManifest(widget.connector ?? LINEAR)} /> : null}
               {widget.type === "agent" ? <AgentWidget id={widget.id} title={title} html={widget.html} /> : null}
               {widget.type === "ask" ? (
                 <div className="ask-card">
@@ -227,7 +228,7 @@ export function Home() {
           onClose={() => setAsking(false)}
           onAdd={(title, html) => {
             widgetCounter += 1;
-            dispatch({ type: "widget-add", widget: { id: `w-agent-${Date.now().toString(36)}-${widgetCounter}`, type: "agent", title, html } });
+            core.addWidget({ id: `w-agent-${Date.now().toString(36)}-${widgetCounter}`, type: "agent", title, html });
             setAsking(false);
             toast(`${agentName} added “${title}”`, "success");
           }}

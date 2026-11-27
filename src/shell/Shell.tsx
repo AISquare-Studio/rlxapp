@@ -1,7 +1,7 @@
 import { useEffect, useState, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
 import { APP_HOMEPAGE_URL } from "../brand/homepage.ts";
 import { RlxMark } from "../brand/RlxMark.tsx";
-import { AgentRunner, useRunningAgents } from "../agents/useAgents.ts";
+import { useRunningAgents } from "../agents/useAgents.ts";
 import { useNow } from "../engine/hooks.ts";
 import type { EngineStatus } from "../engine/types.ts";
 import { MANAGER_ID, agentStatus, wakeLabel, type AgentStatus } from "../state/agents.ts";
@@ -76,7 +76,6 @@ export function Shell({ children }: { children: ReactNode }) {
           {children}
         </main>
       </div>
-      <AgentRunner />
       <Notices />
       <Toasts />
       {state.aboutOpen ? <AboutDialog /> : null}
@@ -156,7 +155,8 @@ function LeftPane() {
   const { screen, navigate, state } = useApp();
   const running = useRunningAgents();
   const now = useNow(30_000);
-  const { agents, devMode } = state.settings;
+  const { devMode } = state.settings;
+  const { agents } = state;
   const here = (id: string) => screen.name === "channel" && screen.id === id;
   const drafts = state.drafts.length;
   const items: { name: ScreenName; label: string; icon: IconName; screen: Screen; dot?: string; active: boolean }[] = [
@@ -265,7 +265,7 @@ function AgentPanel() {
 
 /** Mock system notifications, as a loud run fires them. */
 function Notices() {
-  const { state, dispatch, navigate } = useApp();
+  const { state, core, navigate } = useApp();
   if (!state.notices.length) return null;
   return (
     <div className="notices" aria-live="assertive">
@@ -281,13 +281,13 @@ function Notices() {
               type="button"
               className="button button--sm button--primary"
               onClick={() => {
-                dispatch({ type: "notice-dismiss", id: n.id });
+                core.dismissNotice(n.id);
                 navigate({ name: "channel", id: n.channel });
               }}
             >
               Open
             </button>
-            <button type="button" className="button button--sm" onClick={() => dispatch({ type: "notice-dismiss", id: n.id })}>
+            <button type="button" className="button button--sm" onClick={() => core.dismissNotice(n.id)}>
               Dismiss
             </button>
           </div>

@@ -1,3 +1,6 @@
+import { GMAIL, GOOGLE_CALENDAR, GOOGLE_DRIVE, LINEAR, SLACK, type ConnectorId } from "../core/connectors.ts";
+import type { AccountChoice } from "../engine/types.ts";
+
 /**
  * Agents as a normal person makes them: a name, a schedule, connectors, silent or loud, and an
  * output (owner's brief, 2026-11-25). An agent sleeps by default; the scheduler wakes it for one
@@ -25,13 +28,21 @@ export interface AgentRun {
   modelTurn: boolean;
 }
 
+/**
+ * An agent's definition: app data the core stores with the host (through rlxd's settings API, hub
+ * decision A.4), so every device sees the same agents.
+ */
 export interface Agent {
   id: string;
+  /** The job that wakes it on its schedule; every run the job fires carries this id. */
+  jobId: string;
   name: string;
   /** A short letter-mark for the avatar. */
   avatar: string;
   purpose: string;
-  connectors: string[];
+  connectors: ConnectorId[];
+  /** Which Claude account its runs use; Auto when absent (task #23). */
+  account?: AccountChoice;
   schedule: Schedule;
   mode: AgentMode;
   outputs: AgentOutput[];
@@ -42,13 +53,12 @@ export interface Agent {
 }
 
 /** Every connector the demo user has. Nothing is hard-wired: an agent picks from these. */
-export const USER_CONNECTORS = [
-  "Google Calendar",
-  "Meet transcripts (Google Drive)",
-  "Gmail",
-  "Slack",
-  "Linear",
-] as const;
+export const USER_CONNECTORS: readonly ConnectorId[] = [GOOGLE_CALENDAR, GOOGLE_DRIVE, GMAIL, SLACK, LINEAR];
+
+/** The job id the core gives a new agent's schedule. */
+export function jobIdFor(agentId: string): string {
+  return `job-${agentId}`;
+}
 
 export const START_OF_DAY_ID = "start-of-day";
 
@@ -124,10 +134,11 @@ export function seedAgents(now: number): Agent[] {
   return [
     {
       id: "slack-agent",
+      jobId: jobIdFor("slack-agent"),
       name: "Slack agent",
       avatar: "S",
       purpose: "Watches your DMs, mentions and channels for things that need you.",
-      connectors: ["Slack"],
+      connectors: [SLACK],
       schedule: { kind: "interval", everyMin: 15 },
       mode: "silent",
       outputs: ["widget"],
@@ -136,10 +147,11 @@ export function seedAgents(now: number): Agent[] {
     },
     {
       id: "gmail-agent",
+      jobId: jobIdFor("gmail-agent"),
       name: "Gmail agent",
       avatar: "G",
       purpose: "Finds email waiting on your reply and drafts answers.",
-      connectors: ["Gmail"],
+      connectors: [GMAIL],
       schedule: { kind: "interval", everyMin: 30 },
       mode: "silent",
       outputs: ["widget", "dashboard"],
@@ -148,10 +160,11 @@ export function seedAgents(now: number): Agent[] {
     },
     {
       id: "meetings-agent",
+      jobId: jobIdFor("meetings-agent"),
       name: "Meetings agent",
       avatar: "M",
       purpose: "Reads meeting notes and transcripts for what you promised or were assigned.",
-      connectors: ["Google Calendar", "Meet transcripts (Google Drive)"],
+      connectors: [GOOGLE_CALENDAR, GOOGLE_DRIVE],
       schedule: { kind: "daily", at: "08:45" },
       mode: "silent",
       outputs: ["dashboard"],
@@ -160,10 +173,11 @@ export function seedAgents(now: number): Agent[] {
     },
     {
       id: "gtm-agent",
+      jobId: jobIdFor("gtm-agent"),
       name: "GTM agent",
       avatar: "T",
       purpose: "Reviews the pipeline and drafts the weekly go-to-market notes.",
-      connectors: ["Slack", "Gmail"],
+      connectors: [SLACK, GMAIL],
       schedule: { kind: "weekdays", at: "08:30" },
       mode: "silent",
       outputs: ["channel"],

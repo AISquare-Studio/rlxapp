@@ -1,38 +1,43 @@
-import { useCallback, useEffect, useMemo, useReducer, type ReactNode } from "react";
+import { useCallback, useLayoutEffect, useMemo, useReducer, useSyncExternalStore, type ReactNode } from "react";
+import type { Core, Surface } from "../core/types.ts";
+import type { DemoControls } from "../engine/demo.ts";
 import type { DeveloperEngine, Engine } from "../engine/types.ts";
 import type { Platform } from "../platform/index.ts";
-import { AppContext, type AppContextValue, type DemoControls } from "./context.ts";
+import { AppContext, type AppContextValue } from "./context.ts";
 import { signOffText, type Screen, type Settings, type Toast } from "./model.ts";
-import { STORAGE_KEY, initialState, loadSettings, reducer } from "./reducer.ts";
+import { initialUiState, reducer } from "./reducer.ts";
 
 export interface AppProviderProps {
+  core: Core;
   engine: Engine;
   developer: DeveloperEngine;
   platform: Platform;
-  initialSettings?: Settings;
   now?: () => number;
   demo?: DemoControls;
-  /** Save settings to localStorage (default). Off while measuring the budgets. */
-  persist?: boolean;
   children: ReactNode;
 }
 
 let toastCounter = 0;
 
-export function AppProvider({ engine, developer, platform, initialSettings, now = Date.now, demo, persist = true, children }: AppProviderProps) {
-  const [state, dispatch] = useReducer(reducer, undefined, () => initialState(initialSettings ?? loadSettings(), now()));
+/** What a screen shows, for the core's unread counts. */
+function surfaceOf(screen: Screen): Surface | null {
+  return screen.name === "channel" ? { kind: "channel", id: screen.id } : null;
+}
 
-  useEffect(() => {
-    if (!persist) return;
-    try {
-      globalThis.localStorage?.setItem(STORAGE_KEY, JSON.stringify(state.settings));
-    } catch {
-      // Storage can be unavailable (private mode); settings then last for the session.
-    }
-  }, [state.settings, persist]);
+export function AppProvider({ core, engine, developer, platform, now = Date.now, demo, children }: AppProviderProps) {
+  const snapshot = useSyncExternalStore(core.subscribe, core.snapshot);
+  const [ui, dispatch] = useReducer(reducer, undefined, initialUiState);
+  const screen = useMemo<Screen>(() => ui.history[ui.index] ?? { name: "home" }, [ui.history, ui.index]);
+  const surface = JSON.stringify(surfaceOf(screen));
 
-  const navigate = useCallback((screen: Screen) => dispatch({ type: "navigate", screen }), []);
-  const updateSettings = useCallback((patch: Partial<Settings>) => dispatch({ type: "settings", patch }), []);
+  // Before paint, so opening a channel never flashes its unread dot.
+  useLayoutEffect(() => {
+    core.view(JSON.parse(surface) as Surface | null);
+  }, [core, surface]);
+  useLayoutEffect(() => () => core.view(null), [core]);
+
+  const navigate = useCallback((next: Screen) => dispatch({ type: "navigate", screen: next }), []);
+  const updateSettings = useCallback((patch: Partial<Settings>) => core.updateSettings(patch), [core]);
   const toast = useCallback((text: string, tone: Toast["tone"] = "info") => {
     toastCounter += 1;
     const id = `toast-${toastCounter}`;
@@ -42,22 +47,22 @@ export function AppProvider({ engine, developer, platform, initialSettings, now 
 
   const value = useMemo<AppContextValue>(
     () => ({
-      state,
-      screen: state.history[state.index] ?? { name: "home" },
+      state: { ...snapshot, ...ui },
+      screen,
       dispatch,
+      core,
       engine,
       developer,
       platform,
       navigate,
       updateSettings,
       toast,
-      signOff: signOffText(state.settings.agentName, state.settings.ownerName),
+      signOff: signOffText(snapshot.settings.agentName, snapshot.settings.ownerName),
       now,
       demo,
     }),
-    [state, engine, developer, platform, navigate, updateSettings, toast, now, demo],
+    [snapshot, ui, screen, core, engine, developer, platform, navigate, updateSettings, toast, now, demo],
   );
 
   return <AppContext.Provider value={value}>{children}</AppContext.Provider>;
 }
-
