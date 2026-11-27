@@ -46,7 +46,9 @@
 #
 # Idle RAM (the budget's measure, as decided for rlx: phys_footprint)
 #   After the timed runs, the app is launched N more times (default 3). Each launch
-#   is left idle with its default window open for S seconds past first paint. The
+#   is left idle with its default window open for S seconds past first paint. Under
+#   the probe, app_info reports `measuring`, so the UI opens on Home (not onboarding)
+#   with its default widgets and agents, and saves no settings. The
 #   script then samples every process that belongs to the app:
 #     - the app process itself;
 #     - the WebKit XPC helpers that launchd started on its behalf:
@@ -236,6 +238,17 @@ fi
 installer_verdict=$(verdict "$installer_mb" "$BUDGET_DMG_MB")
 note_verdict "$installer_verdict"
 echo
+
+# rlx is single-instance: while any copy runs (e.g. /Applications/rlx.app), a new launch hands
+# off to it and exits without painting. Never quit someone's running copy; say so and stop.
+other_rlx=$(ps -axo pid=,comm= | LC_ALL=C awk -v bin="$BIN" '{
+  pid = $1
+  sub(/^ *[0-9]+ /, "")
+  if ($0 ~ /\/rlx\.app\/Contents\/MacOS\/rlxapp$/ && $0 != bin) print pid " " $0
+}')
+if [[ -n $other_rlx ]]; then
+  die "another rlx is running ($other_rlx). rlx is single-instance, so new launches would hand off to it. Quit it, then measure again."
+fi
 
 # 2. Cold start ------------------------------------------------------------------
 echo "cold start: launch -> first contentful paint, $runs run(s)$( ((do_purge)) && echo ', file cache purged before each')"

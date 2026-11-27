@@ -1,0 +1,13 @@
+/* Fixture: calm CSS the lint must accept. Never imported by the app. */
+.card { padding: var(--rlx-space-4); border: var(--rlx-border-width) solid var(--rlx-border-color); border-radius: var(--rlx-radius-md); }
+.card.is-selected {
+  border-color: var(--rlx-selection-border);
+  background: var(--rlx-selection-bg);
+}
+.divider { border-top: var(--rlx-border-width) solid var(--rlx-border-color); border-left: 0; }
+.menu { box-shadow: var(--rlx-shadow-overlay); margin: 0 calc(-1 * var(--rlx-space-2)); }
+.round { border-radius: 50%; outline: var(--rlx-focus-width) solid var(--rlx-focus-color); }
+.dot::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--rlx-success); }
+.link { text-decoration: underline; text-decoration-color: var(--rlx-border-strong); font-size: var(--rlx-text-sm); }
+.ring { background: conic-gradient(var(--rlx-accent) 40%, var(--rlx-surface) 0); }
+.layout { --gap: var(--rlx-space-2); font-family: var(--rlx-font-sans); animation: fade-in var(--rlx-motion); }

@@ -1,6 +1,7 @@
 /*
  * Design tokens. Colours mirror src/theme/themes.ts (a test keeps them equal);
  * select a theme with <html data-theme="…">. The default is rlx, rlx's TUI palette.
+ * Widgets, agent-made ones included, style themselves with var(--rlx-…).
  */
 :root,
 [data-theme="rlx"] {
@@ -17,18 +18,182 @@
   --rlx-panel: #1A1B20;
   --rlx-on-primary: #08090B;
   --rlx-mark: #2F74F0;
+  --rlx-muted: #A3A8B3;
+  --rlx-border: #2A2C33;
 }
 
-/* Theme-independent tokens. */
+[data-theme="rlx-light"] {
+  color-scheme: light;
+  --rlx-primary: #1E5FD6;
+  --rlx-secondary: #6A7A00;
+  --rlx-accent: #0F766E;
+  --rlx-warning: #A85400;
+  --rlx-error: #C42B2F;
+  --rlx-success: #15803D;
+  --rlx-foreground: #121317;
+  --rlx-background: #F6F7F9;
+  --rlx-surface: #FFFFFF;
+  --rlx-panel: #ECEEF2;
+  --rlx-on-primary: #FFFFFF;
+  --rlx-mark: #1E5FD6;
+  --rlx-muted: #505662;
+  --rlx-border: #D5D9E0;
+}
+
+[data-theme="catppuccin-mocha"] {
+  color-scheme: dark;
+  --rlx-primary: #89B4FA;
+  --rlx-secondary: #F9E2AF;
+  --rlx-accent: #94E2D5;
+  --rlx-warning: #FAB387;
+  --rlx-error: #F38BA8;
+  --rlx-success: #A6E3A1;
+  --rlx-foreground: #CDD6F4;
+  --rlx-background: #1E1E2E;
+  --rlx-surface: #181825;
+  --rlx-panel: #313244;
+  --rlx-on-primary: #11111B;
+  --rlx-mark: #89B4FA;
+  --rlx-muted: #A6ADC8;
+  --rlx-border: #45475A;
+}
+
+[data-theme="catppuccin-latte"] {
+  color-scheme: light;
+  --rlx-primary: #1E66F5;
+  --rlx-secondary: #8C6A00;
+  --rlx-accent: #0E6B6D;
+  --rlx-warning: #B04A00;
+  --rlx-error: #C9184A;
+  --rlx-success: #2B7A12;
+  --rlx-foreground: #4C4F69;
+  --rlx-background: #EFF1F5;
+  --rlx-surface: #FFFFFF;
+  --rlx-panel: #E6E9EF;
+  --rlx-on-primary: #FFFFFF;
+  --rlx-mark: #1A5BDB;
+  --rlx-muted: #5C5F77;
+  --rlx-border: #CCD0DA;
+}
+
+[data-theme="solarized-dark"] {
+  color-scheme: dark;
+  --rlx-primary: #4BA3E8;
+  --rlx-secondary: #B58900;
+  --rlx-accent: #3CBDB3;
+  --rlx-warning: #D9822B;
+  --rlx-error: #F2615E;
+  --rlx-success: #99B300;
+  --rlx-foreground: #E3E3DA;
+  --rlx-background: #002B36;
+  --rlx-surface: #00212B;
+  --rlx-panel: #073642;
+  --rlx-on-primary: #00212B;
+  --rlx-mark: #4BA3E8;
+  --rlx-muted: #A3B1B3;
+  --rlx-border: #1C4A55;
+}
+
+[data-theme="solarized-light"] {
+  color-scheme: light;
+  --rlx-primary: #1F6FB0;
+  --rlx-secondary: #8A6800;
+  --rlx-accent: #116D67;
+  --rlx-warning: #A84E00;
+  --rlx-error: #C2272D;
+  --rlx-success: #5A6B00;
+  --rlx-foreground: #2F3E44;
+  --rlx-background: #FDF6E3;
+  --rlx-surface: #FFFFFF;
+  --rlx-panel: #EEE8D5;
+  --rlx-on-primary: #FFFFFF;
+  --rlx-mark: #1F6FB0;
+  --rlx-muted: #4E5E64;
+  --rlx-border: #D9D2BD;
+}
+
+/*
+ * Theme-independent tokens, calm first (rule-calm-design): an 8 px spacing grid, ONE border width
+ * and ONE border colour, a small radius set, three text sizes, muted secondary text, and a subtle
+ * selection (a low-alpha accent tint and border). Components use these only; `npm run lint`
+ * (src/theme/calmLint.ts) fails on anything else.
+ */
 :root {
   --rlx-font-sans: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", sans-serif;
   --rlx-font-mono: ui-monospace, "JetBrains Mono", "SF Mono", Menlo, Consolas, monospace;
-  --rlx-radius-sm: 6px;
-  --rlx-radius-md: 10px;
+  --rlx-radius-xs: 4px;
+  --rlx-radius-sm: 8px;
+  --rlx-radius-md: 12px;
   --rlx-radius-lg: 16px;
+  --rlx-radius-pill: 999px;
   --rlx-space-1: 4px;
   --rlx-space-2: 8px;
   --rlx-space-3: 12px;
   --rlx-space-4: 16px;
   --rlx-space-6: 24px;
+  --rlx-space-8: 32px;
+  --rlx-space-12: 48px;
+  --rlx-font-size: 14px;
+  --rlx-text-sm: calc(var(--rlx-font-size) * 0.86);
+  --rlx-text-md: var(--rlx-font-size);
+  --rlx-text-lg: calc(var(--rlx-font-size) * 1.29);
+  /* Widget numerals only (clock, timer, pomodoro). */
+  --rlx-text-display: calc(var(--rlx-font-size) * 2.6);
+  --rlx-row: 36px;
+  --rlx-motion: 160ms;
+
+  --rlx-border-width: 1px;
+  --rlx-border-color: var(--rlx-border);
+  /* Hover and selection: a slightly stronger neutral, or the accent at low alpha. Never a bar. */
+  --rlx-border-strong: color-mix(in srgb, var(--rlx-border) 55%, var(--rlx-muted));
+  --rlx-hover-bg: color-mix(in srgb, var(--rlx-foreground) 5%, transparent);
+  --rlx-selection-bg: color-mix(in srgb, var(--rlx-accent) 12%, transparent);
+  --rlx-selection-border: color-mix(in srgb, var(--rlx-accent) 45%, var(--rlx-border));
+  --rlx-chip-bg: color-mix(in srgb, var(--rlx-foreground) 7%, transparent);
+  --rlx-focus-width: 2px;
+  --rlx-focus-color: var(--rlx-primary);
+  --rlx-scrim: rgb(0 0 0 / 0.45);
+  --rlx-shadow-overlay: 0 12px 32px rgb(0 0 0 / 0.22);
+  --rlx-terminal-bg: #0B0C0E;
+  --rlx-terminal-fg: #E6E6E6;
+}
+
+/* Density: three levels, set with <html data-density="…">. Every step stays on the 8 px grid. */
+[data-density="compact"] {
+  --rlx-space-1: 4px;
+  --rlx-space-2: 4px;
+  --rlx-space-3: 8px;
+  --rlx-space-4: 12px;
+  --rlx-space-6: 16px;
+  --rlx-space-8: 24px;
+  --rlx-space-12: 32px;
+  --rlx-font-size: 13px;
+  --rlx-row: 32px;
+}
+
+[data-density="spacious"] {
+  --rlx-space-1: 8px;
+  --rlx-space-2: 12px;
+  --rlx-space-3: 16px;
+  --rlx-space-4: 24px;
+  --rlx-space-6: 32px;
+  --rlx-space-8: 48px;
+  --rlx-space-12: 48px;
+  --rlx-font-size: 15px;
+  --rlx-row: 48px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --rlx-motion: 0ms;
+  }
+
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0ms !important;
+    scroll-behavior: auto !important;
+  }
 }

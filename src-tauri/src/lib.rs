@@ -7,13 +7,14 @@ mod e2e;
 // Test builds are debug builds (`npm run e2e:build`); a release never carries it.
 #[cfg(all(feature = "e2e", not(debug_assertions)))]
 compile_error!("the e2e feature is for debug test builds only (npm run e2e:build)");
+pub mod engine_home;
 mod probe;
 pub mod widget_host;
 
 use probe::Probe;
 use serde::Serialize;
 use tauri::http::{Request, Response};
-use tauri::{Emitter, Manager, Runtime, UriSchemeContext};
+use tauri::{AppHandle, Emitter, Manager, Runtime, UriSchemeContext, WindowEvent};
 
 /// The user-facing app name. Must equal `productName` in tauri.conf.json (checked by a test);
 /// the crate and repository keep the name `rlxapp`.
@@ -22,13 +23,16 @@ pub const PRODUCT_NAME: &str = "rlx";
 /// The bundle identifier. Fixed before the first release: it keys app data and Keychain items.
 pub const BUNDLE_ID: &str = "studio.aisquare.rlx";
 
-/// Static facts about the running build, shown on the placeholder screen.
+/// Static facts about the running build, shown in the About box.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct AppInfo {
     pub name: &'static str,
     pub version: &'static str,
     pub os: &'static str,
     pub arch: &'static str,
+    /// Launched under the startup probe (scripts/measure-budgets.sh): the UI then opens on Home
+    /// without saving settings, so the budgets are measured on Home, not onboarding.
+    pub measuring: bool,
 }
 
 impl AppInfo {
@@ -38,6 +42,7 @@ impl AppInfo {
             version: env!("CARGO_PKG_VERSION"),
             os: std::env::consts::OS,
             arch: std::env::consts::ARCH,
+            measuring: std::env::var_os(probe::ENV_VAR).is_some(),
         }
     }
 }
@@ -88,13 +93,46 @@ fn widget_scheme<R: Runtime>(
     response
 }
 
+/// Brings the main window back: from a second launch (single instance), the Dock, or the rlx
+/// service tray's "Open rlx app" (which launches the app, so it arrives as a second launch).
+fn show_main<R: Runtime>(app: &AppHandle<R>) {
+    #[cfg(target_os = "macos")]
+    let _ = app.set_dock_visibility(true);
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.unminimize();
+        let _ = window.show();
+        let _ = window.set_focus();
+    }
+}
+
+/// Closing the window hides it and keeps the process alive, so the app's gate stays connected
+/// for scheduled jobs. The app draws no tray: the one tray icon belongs to the rlx service
+/// (rlxd). On macOS the Dock icon goes too, until the window comes back.
+fn hide_main<R: Runtime>(window: &tauri::Window<R>) {
+    let _ = window.hide();
+    #[cfg(target_os = "macos")]
+    let _ = window.app_handle().set_dock_visibility(false);
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let builder = tauri::Builder::default()
+        // First, so a second launch exits early and focuses this one.
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            show_main(app);
+        }))
         .manage(Probe::from_env())
         .manage(widget_host::Registry::default())
         .manage(widget_host::state::HostState::default())
-        .register_uri_scheme_protocol(widget_host::SCHEME, widget_scheme);
+        .register_uri_scheme_protocol(widget_host::SCHEME, widget_scheme)
+        .on_window_event(|window, event| {
+            if let WindowEvent::CloseRequested { api, .. } = event
+                && window.label() == "main"
+            {
+                api.prevent_close();
+                hide_main(window);
+            }
+        });
 
     #[cfg(not(feature = "e2e"))]
     let builder = builder.invoke_handler(tauri::generate_handler![
@@ -129,9 +167,18 @@ pub fn run() {
             Ok(())
         });
 
-    builder
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+    let app = builder
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application");
+
+    app.run(|_app, _event| {
+        // Opening the app again (Finder, Spotlight, the Dock) while it runs hidden brings the
+        // window back.
+        #[cfg(target_os = "macos")]
+        if let tauri::RunEvent::Reopen { .. } = _event {
+            show_main(_app);
+        }
+    });
 }
 
 #[cfg(test)]
@@ -156,7 +203,7 @@ mod tests {
         let json = serde_json::to_value(AppInfo::current()).unwrap();
         let mut keys: Vec<_> = json.as_object().unwrap().keys().cloned().collect();
         keys.sort();
-        assert_eq!(keys, ["arch", "name", "os", "version"]);
+        assert_eq!(keys, ["arch", "measuring", "name", "os", "version"]);
     }
 
     #[test]
@@ -249,5 +296,68 @@ mod tests {
                 .lines()
                 .any(|line| line == format!("Name={PRODUCT_NAME}"))
         );
+    }
+
+    /// Every Rust source of the product build (src/, minus the test-only e2e module).
+    fn product_sources() -> Vec<(String, String)> {
+        let mut out = Vec::new();
+        let mut dirs = vec![std::path::PathBuf::from(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/src"
+        ))];
+        while let Some(dir) = dirs.pop() {
+            for entry in std::fs::read_dir(&dir).expect("src dir").flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    if path.file_name().is_some_and(|n| n != "e2e") {
+                        dirs.push(path);
+                    }
+                } else if path.extension().is_some_and(|e| e == "rs") {
+                    let text = std::fs::read_to_string(&path).expect("readable");
+                    out.push((path.display().to_string(), text));
+                }
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn the_app_draws_no_tray_icon() {
+        // The one tray icon belongs to the rlx service (rlxd); the app creates none.
+        let builder = concat!("Tray", "IconBuilder");
+        let api = concat!("tauri::", "tray");
+        for (path, text) in product_sources() {
+            assert!(!text.contains(builder), "{path} builds a tray icon");
+            assert!(!text.contains(api), "{path} uses the tray API");
+        }
+        let manifest = include_str!("../Cargo.toml");
+        assert!(
+            !manifest.contains(concat!("tray", "-icon")),
+            "Cargo.toml enables the tray-icon feature"
+        );
+    }
+
+    #[test]
+    fn the_app_registers_no_login_item() {
+        // "Start rlx at login" is the rlx service's registration, set through the Engine.
+        let forbidden = [
+            concat!("Launch", "Agents"),
+            concat!("SMApp", "Service"),
+            concat!("auto", "start"),
+            concat!("auto", "_launch"),
+            concat!("Login", "Items"),
+        ];
+        for (path, text) in product_sources() {
+            for word in forbidden {
+                assert!(!text.contains(word), "{path} mentions {word}");
+            }
+        }
+        let manifest = include_str!("../Cargo.toml");
+        for plugin in [
+            concat!("tauri-plugin-auto", "start"),
+            concat!("auto-", "launch"),
+        ] {
+            assert!(!manifest.contains(plugin), "Cargo.toml depends on {plugin}");
+        }
     }
 }
