@@ -50,7 +50,7 @@ function sidePlan(index, { dns = false } = {}) {
  * CONNECTs every proxied target (IPv6 without brackets) and the residual goes direct; on
  * Windows, Chromium CONNECTs https and sends nothing on an http preconnect through the proxy.
  */
-function reachParts(os, { dns = false } = {}) {
+function reachParts(os, { dns = false, silent = false } = {}) {
   const plans = [0, 1, 2].map((index) => sidePlan(index, { dns }));
   const starts = [100_000, 50_000, 10_000];
   const tried = plans.map((plan, index) => plan.map((attempt, i) => ({ ...attempt, at: starts[index] + 250 * i })));
@@ -66,24 +66,33 @@ function reachParts(os, { dns = false } = {}) {
         }
         continue;
       }
+      if (silent) continue;
       const authority = os === "macos" ? attempt.authority.replace(/^\[([^\]]+)\]/, "$1") : attempt.authority;
       log.push(os !== "macos" && attempt.scheme === "http" ? `${attempt.at + 5} no data` : `${attempt.at + 5} CONNECT ${authority} HTTP/1.1`);
     }
   }
   const queries = dns ? [`${starts[2] + 300} A main.rlx-probe-dns.test`, `${starts[2] + 600} A main-prefetch.rlx-probe-dns.test`] : [];
+  // Windows' netstat witness sees main's direct attempts to its TEST-NET address.
+  const netstat =
+    os === "windows"
+      ? { samples: 200, errors: 0, synSent: tried[2].filter((a) => a.id === "test-net").map((a) => `${a.at + 3} ${a.authority}`).concat([`1 20.1.2.3:443`]) }
+      : undefined;
   return {
     plans,
     tried,
     log,
     hits,
+    netstat,
     dns: dns ? { zone: "rlx-probe-dns.test", port: 53535, queries } : null,
   };
 }
 
 /** Puts `os`'s clean reach parts into `report`. */
-function withReach(report, os, { dns = false } = {}) {
-  const parts = reachParts(os, { dns });
+function withReach(report, os, { dns = false, silent = false } = {}) {
+  const parts = reachParts(os, { dns, silent });
   report.os = os;
+  if (os !== "macos") report.policy = { ...report.policy, agentWidgetsEligibility: "eligible", residual: null };
+  if (parts.netstat) report.netstat = parts.netstat;
   report.reach = { lan: LAN, plans: { "widgets-host": parts.plans[0], "widget-iframe": parts.plans[1], main: parts.plans[2] } };
   report.host.reach = parts.tried[0];
   report.host.iframe.reach = parts.tried[1];
@@ -105,7 +114,13 @@ function baseReport() {
   return {
     schema: 5,
     os: "macos",
-    policy: { widgetWebview: true, builtins: "widgets", agentWidgets: "off: off until the probe passes", agentWidgetsEligibility: "eligible", residual: "local-network" },
+    policy: {
+      widgetWebview: true,
+      builtins: "widgets",
+      agentWidgets: "off: off until the probe passes",
+      agentWidgetsEligibility: "ineligible: WebKit resolves dns-prefetch names outside the deny-all proxy (measured on macOS 26.7), so macOS gets declarative widgets only",
+      residual: "dns-prefetch-leak",
+    },
     proxy: { support: "deny-all", port: 4321, refused: 3, log: [] },
     dns: null,
     webrtc: "removed (frames.js)",
@@ -183,10 +198,20 @@ function strictly(fn) {
 
 describe("isolation probe rules", () => {
   it("passes a clean report", () => {
-    const checks = evaluate(passingReport());
+    const checks = evaluate(passingReport("windows"));
     expect(failing(checks)).toEqual([]);
     expect(passed(checks)).toBe(true);
     expect(agentVerdict(checks).mayTurnOn).toBe(true);
+  });
+
+  it("keeps macOS ineligible by the policy's residual, even when every gate passes", () => {
+    const checks = strictly(() => evaluate(passingReport()));
+    expect(failing(checks)).toEqual([]);
+    expect(passed(checks)).toBe(true);
+    const verdict = agentVerdict(checks);
+    expect(verdict).toMatchObject({ mayTurnOn: false, ineligible: true });
+    expect(verdict.why).toMatch(/dns-prefetch-leak/);
+    expect(toMarkdown("probe", checks)).toContain("Agent-made HTML widgets are **not eligible** on this OS");
   });
 
   it("refuses a report from another schema", () => {
@@ -220,20 +245,20 @@ describe("isolation probe rules", () => {
     expect(untagged).toEqual([13]);
   });
 
-  it("gates every (side, target) on macOS but the owner-accepted residual, which is info with a warning", () => {
+  it("gates every (side, target) on macOS but the local-network residual, which is info", () => {
     const checks = strictly(() => evaluate(passingReport()));
     expect(failing(checks)).toEqual([]);
     expect(passed(checks)).toBe(true);
     const residual = checks.filter((c) => c.residual).map((c) => c.id);
     expect(residual).toEqual([
-      "host page: loopback preconnect (owner-accepted macOS residual (warned))",
-      "widget iframe: loopback preconnect (owner-accepted macOS residual (warned))",
+      "host page: loopback preconnect (macOS local-network residual (measured))",
+      "widget iframe: loopback preconnect (macOS local-network residual (measured))",
       ...["host page", "widget iframe"].flatMap((label) => [
-        `${label} → loopback-v4 (127.0.0.1): owner-accepted macOS residual (warned)`,
-        `${label} → localhost (localhost): owner-accepted macOS residual (warned)`,
-        `${label} → loopback-v6 ([::1]): owner-accepted macOS residual (warned)`,
-        `${label} → own-lan-address (${LAN}): owner-accepted macOS residual (warned)`,
-        `${label} → link-local-v4 (169.254.77.77): owner-accepted macOS residual (warned)`,
+        `${label} → loopback-v4 (127.0.0.1): macOS local-network residual (measured)`,
+        `${label} → localhost (localhost): macOS local-network residual (measured)`,
+        `${label} → loopback-v6 ([::1]): macOS local-network residual (measured)`,
+        `${label} → own-lan-address (${LAN}): macOS local-network residual (measured)`,
+        `${label} → link-local-v4 (169.254.77.77): macOS local-network residual (measured)`,
       ]),
     ]);
     expect(checks.find((c) => c.id.startsWith("host page → loopback-v4")).detail).toBe(
@@ -246,8 +271,7 @@ describe("isolation probe rules", () => {
       "http: CONNECT [fe80::77]:42014 · https: CONNECT [fe80::77]:42015",
     );
     expect(gates.some((c) => c.id.startsWith("host page → sub-localhost"))).toBe(true);
-    expect(agentVerdict(checks).mayTurnOn).toBe(true);
-    expect(toMarkdown("probe", checks)).toContain("with the warning for the owner-accepted residual");
+    expect(agentVerdict(checks).mayTurnOn).toBe(false);
   });
 
   it("fails the gate of an off-host target that goes past the proxy on macOS", () => {
@@ -300,11 +324,41 @@ describe("isolation probe rules", () => {
     checks = evaluate(report);
     expect(failing(checks)).toEqual(["widget iframe → loopback-v4 (127.0.0.1) reaches only the deny-all proxy", "widget iframe: 0 direct connections to this host's own addresses"]);
     strictly(() => expect(passed(evaluate(report))).toBe(false));
-    // An http preconnect with no proxy connection near it fails too.
+    // An http preconnect with no proxy connection near it passes only as "seen by nothing".
     const clean = passingReport("windows");
     const target = clean.host.reach.find((a) => a.id === "rfc1918-10" && a.scheme === "http");
     clean.proxy.log = clean.proxy.log.filter((line) => line !== `${target.at + 5} no data`);
-    expect(failing(evaluate(clean))).toEqual(["host page → rfc1918-10 (10.255.255.1) reaches only the deny-all proxy"]);
+    expect(failing(evaluate(clean))).toEqual([]);
+    expect(evaluate(clean).find((c) => c.id.startsWith("host page → rfc1918-10")).detail).toMatch(/^http: seen by nothing/);
+  });
+
+  it("on Windows, passes a pair nothing anywhere saw, with the netstat witness's positive control", () => {
+    const report = passingReport("windows", { silent: true });
+    let checks = strictly(() => evaluate(report));
+    expect(failing(checks)).toEqual([]);
+    expect(checks.find((c) => c.id.startsWith("netstat witness"))).toMatchObject({
+      ok: true,
+      detail: "200 samples, 3 SYN_SENT endpoint(s); main's: 198.51.100.9:43000, 198.51.100.9:43001",
+    });
+    expect(checks.find((c) => c.id === "widget iframe → test-net (198.51.100.8) reaches only the deny-all proxy").detail).toBe(
+      "http: seen by nothing (no CONNECT, no direct connection or attempt, no lookup) · https: seen by nothing (no CONNECT, no direct connection or attempt, no lookup)",
+    );
+    // A widget's own connection attempt off this host fails its pair.
+    report.netstat.synSent.push("5 [fe80::77]:42015");
+    checks = evaluate(report);
+    expect(failing(checks)).toEqual(["widget iframe → link-local-v6 ([fe80::77]) reaches only the deny-all proxy"]);
+    expect(checks.find((c) => c.id.startsWith("widget iframe → link-local-v6")).detail).toMatch(/https: not in the proxy log; direct: a connection attempt to \[fe80::77\]:42015/);
+    strictly(() => expect(passed(evaluate(report))).toBe(false));
+    // Without the positive control, "seen by nothing" proves nothing: every silent pair fails.
+    const blind = passingReport("windows", { silent: true });
+    blind.netstat.synSent = [];
+    const failed = failing(evaluate(blind));
+    expect(failed[0]).toBe("netstat witness: main's direct connection attempt to its TEST-NET address is seen (positive control)");
+    expect(failed.filter((id) => id.endsWith("reaches only the deny-all proxy"))).toHaveLength(2 * 13);
+    delete blind.netstat;
+    expect(evaluate(blind).find((c) => c.id.startsWith("netstat witness")).detail).toBe("no netstat samples in the report");
+    // macOS has no witness: a pair the proxy didn't log fails there.
+    expect(evaluate(passingReport()).some((c) => c.id.startsWith("netstat witness"))).toBe(false);
   });
 
   it("keeps agent-made widgets off where the OS has no per-webview proxy (macOS 13), and fails in strict mode", () => {
@@ -328,7 +382,7 @@ describe("isolation probe rules", () => {
     report.listeners.host.hits = ["1 tcp connection, no data", "2 tcp connection, no data"];
     report.listeners.iframe.hits = ["1 tcp connection, no data"];
     let checks = evaluate(report);
-    const row = checks.find((c) => c.id === "host page: loopback preconnect (owner-accepted macOS residual (warned))");
+    const row = checks.find((c) => c.id === "host page: loopback preconnect (macOS local-network residual (measured))");
     expect(row.info).toBe(true);
     expect(row.detail).toMatch(/^2 TCP connection\(s\) that sent nothing: preconnect ×2\. macOS never proxies loopback/);
     expect(failing(checks)).toEqual([]);
@@ -388,11 +442,28 @@ describe("isolation probe rules", () => {
     expect(checks.find((c) => c.id === "host page → dns-name (widgets-host.rlx-probe-dns.test) reaches only the deny-all proxy").detail).toBe(
       "http: CONNECT widgets-host.rlx-probe-dns.test:41026; 0 DNS queries · https: CONNECT widgets-host.rlx-probe-dns.test:41027; 0 DNS queries",
     );
-    // A widget's name looked up: the side's row fails.
-    report.dns.queries.push("1 AAAA widget-iframe-prefetch.rlx-probe-dns.test");
-    checks = evaluate(report);
-    expect(failing(checks)).toEqual(["widget iframe → dns-prefetch (widget-iframe-prefetch.rlx-probe-dns.test) reaches only the deny-all proxy"]);
-    strictly(() => expect(passed(evaluate(report))).toBe(false));
+    // macOS: a widget's dns-prefetch name looked up is the known reason macOS isn't eligible.
+    // It stays a gate (⛔), but a strict run fails only on other gates.
+    report.dns.queries.push("1 AAAA widget-iframe-prefetch.rlx-probe-dns.test", "1 A widget-iframe-prefetch.rlx-probe-dns.test");
+    checks = strictly(() => evaluate(report));
+    const prefetch = "widget iframe → dns-prefetch (widget-iframe-prefetch.rlx-probe-dns.test) reaches only the deny-all proxy";
+    expect(failing(checks)).toEqual([prefetch]);
+    expect(checks.find((c) => c.id === prefetch)).toMatchObject({ gate: true, blocking: false });
+    expect(checks.find((c) => c.id === prefetch).detail).toBe(
+      "dns-prefetch: 2 DNS queries (the known reason macOS isn't eligible: WebKit resolves dns-prefetch names outside the proxy)",
+    );
+    expect(passed(checks)).toBe(true);
+    expect(agentVerdict(checks).mayTurnOn).toBe(false);
+    expect(toMarkdown("probe", checks)).toContain(`| ⛔ | ${prefetch} |`);
+    // Any other DNS leak on macOS fails a strict run.
+    report.dns.queries.push("2 A widgets-host.rlx-probe-dns.test");
+    checks = strictly(() => evaluate(report));
+    expect(failing(checks)).toContain("host page → dns-name (widgets-host.rlx-probe-dns.test) reaches only the deny-all proxy");
+    expect(passed(checks)).toBe(false);
+    // On Windows a dns-prefetch lookup is an ordinary gate: strict fails.
+    const windows = passingReport("windows", { dns: true });
+    windows.dns.queries.push("1 A widgets-host-prefetch.rlx-probe-dns.test");
+    strictly(() => expect(passed(evaluate(windows))).toBe(false));
     // No query for main's name: the route doesn't work, and the run fails.
     const noRoute = passingReport("windows", { dns: true });
     noRoute.dns.queries = [];

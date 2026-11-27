@@ -28,8 +28,9 @@
 //!   context or WebView2 environment, so main's networking is untouched ([`isolation`]).
 //! - **The switch.** [`policy`] keeps agent-made widgets off on every OS until the isolation
 //!   probe passes there and the owner turns them on. Even with it on, an agent-made widget
-//!   registers only on a machine with the running deny-all proxy ([`proxy::ensure_eligible`]):
-//!   never on macOS 13 or older, or where the version can't be read.
+//!   registers only on an eligible machine with the running deny-all proxy
+//!   ([`proxy::ensure_eligible`]): never on macOS, where WebKit's DNS prefetch leaks names
+//!   outside the proxy (and macOS 13 or older has no proxy at all).
 //!
 //! # Per OS in v0 ([`policy`])
 //! - macOS: built-ins render in the widget webview. Agent-made widgets are off.
@@ -44,7 +45,7 @@
 //! The commands are granted to `main` in capabilities/default.json. Through `invoke`:
 //! - `widgets_policy()` → [`PolicyInfo`]: whether a widget webview exists, where built-ins
 //!   render (`"widgets"` or `"main"`), the agent-widget switch, whether this machine is
-//!   eligible for agent-made widgets at all, and the residual its opt-in must warn about.
+//!   eligible for agent-made widgets at all, and the measured residual that decides it.
 //! - `widgets_show({ bounds })` (async): attach the widgets webview on first use, then place
 //!   and show it. `bounds` is `{ x, y, width, height }` in logical px relative to the window:
 //!   the Home grid's rect. Call it again on every layout change. It fails where
@@ -210,11 +211,11 @@ pub struct PolicyInfo {
     /// `"on"`, or `"off: <reason>"`.
     pub agent_widgets: String,
     /// Whether this machine could run agent-made widgets if the switch were on: `"eligible"`,
-    /// or `"ineligible: <reason>"`. Only a widgets webview behind the deny-all proxy is.
+    /// or `"ineligible: <reason>"`. Only a widgets webview behind the deny-all proxy is, and
+    /// never on macOS ([`proxy::eligibility_for`]).
     pub agent_widgets_eligibility: String,
-    /// What the deny-all proxy leaves open on this machine, for the warning the "Custom HTML
-    /// widgets" opt-in shows: `"local-network"` on macOS 14+ ([`proxy::Residual`]), or null.
-    /// Set only where the machine is eligible.
+    /// What the deny-all proxy leaves open on this OS, for the "Custom HTML widgets" setting
+    /// to explain itself: `"dns-prefetch-leak"` on macOS ([`proxy::Residual`]), or null.
     pub residual: Option<proxy::Residual>,
 }
 
@@ -274,8 +275,8 @@ pub(crate) fn valid_id(id: &str) -> bool {
 /// HTML sinks a built-in may not use, since WebKit's preconnect ignores CSP: a built-in
 /// renders connector text (Slack, email), and markup parsed from that text could reach the
 /// network through a `<link>`. Built-ins set text with `textContent` only. Keep this while
-/// any OS renders built-ins without the deny-all proxy ([`proxy`]): macOS 11-13 does, and
-/// macOS 14+ leaves the local network open ([`proxy::Residual`]). Main's React has the same
+/// any OS renders built-ins without the deny-all proxy ([`proxy`]): macOS 11-13 does, and on
+/// macOS 14+ WebKit's DNS prefetch gets past it ([`proxy::Residual`]). Main's React has the same
 /// rule, by lint (`.oxlintrc.json`).
 pub const BUILTIN_HTML_SINKS: &[&str] = &[
     "innerHTML",
@@ -352,10 +353,7 @@ impl Registry {
                 Switch::On => "on".to_owned(),
                 Switch::Off(reason) => format!("off: {reason}"),
             },
-            residual: eligibility
-                .is_ok()
-                .then(|| proxy::residual_for(self.os))
-                .flatten(),
+            residual: proxy::residual_for(self.os),
             agent_widgets_eligibility: match eligibility {
                 Ok(()) => "eligible".to_owned(),
                 Err(reason) => format!("ineligible: {reason}"),
@@ -873,8 +871,8 @@ mod tests {
         builtins: Placement::Main,
         agent_widgets: Switch::Off("no widget webview"),
     };
-    /// A machine with the deny-all proxy.
-    const ELIGIBLE: proxy::Os = proxy::Os::MacOs(Some(14));
+    /// An eligible machine: Windows, behind the deny-all proxy.
+    const ELIGIBLE: proxy::Os = proxy::Os::Windows;
 
     fn get(path: &str) -> Request<Vec<u8>> {
         Request::builder()
@@ -902,9 +900,9 @@ mod tests {
         let info = Registry::new(policy).info();
         assert!(info.agent_widgets.starts_with("off: "));
         if cfg!(target_os = "macos") {
-            // CI and dev Macs run macOS 14 or later.
-            assert_eq!(info.agent_widgets_eligibility, "eligible");
-            assert_eq!(info.residual, Some(proxy::Residual::LocalNetwork));
+            // No Mac is eligible while WebKit's DNS prefetch leaks (the owner's decision).
+            assert!(info.agent_widgets_eligibility.starts_with("ineligible: "));
+            assert_eq!(info.residual, Some(proxy::Residual::DnsPrefetchLeak));
         } else {
             assert_eq!(
                 info.agent_widgets_eligibility,
@@ -914,13 +912,22 @@ mod tests {
         }
     }
 
-    /// The switch alone never turns agent-made widgets on. macOS 13
-    /// or older, or a version that can't be read (10.x is SYSTEM_VERSION_COMPAT), has no
-    /// deny-all proxy, so nothing agent-made registers there.
+    /// The switch alone never turns agent-made widgets on. No Mac is eligible (WebKit's DNS
+    /// prefetch leaks names outside the proxy, and macOS 13 or older has no proxy; 10.x is
+    /// SYSTEM_VERSION_COMPAT), so nothing agent-made registers there. Windows is, behind the
+    /// running proxy.
     #[test]
-    fn agent_widgets_need_the_running_deny_all_proxy() {
+    fn agent_widgets_need_an_eligible_machine_with_the_running_proxy() {
         use proxy::Os;
-        for os in [Os::MacOs(Some(13)), Os::MacOs(Some(10)), Os::MacOs(None)] {
+        let macs = [
+            Os::MacOs(Some(13)),
+            Os::MacOs(Some(10)),
+            Os::MacOs(None),
+            Os::MacOs(Some(14)),
+            Os::MacOs(Some(26)),
+            Os::MacOs(Some(27)),
+        ];
+        for os in macs {
             let registry = Registry::on_os(ON, os);
             for source in [Source::Agent, Source::User] {
                 assert!(
@@ -943,22 +950,28 @@ mod tests {
                 info.agent_widgets_eligibility.starts_with("ineligible: "),
                 "{os:?}"
             );
-            assert_eq!(info.residual, None);
+            assert_eq!(info.residual, Some(proxy::Residual::DnsPrefetchLeak));
         }
-        for os in [Os::MacOs(Some(14)), Os::MacOs(Some(26)), Os::Windows] {
-            let registry = Registry::on_os(ON, os);
-            assert!(registry.register(Source::Agent, "w", 1, "<p>x</p>").is_ok());
-            assert!(proxy::running().is_some(), "registering started the proxy");
-            assert_eq!(registry.info().agent_widgets_eligibility, "eligible");
-        }
-        assert_eq!(
-            Registry::on_os(ON, Os::MacOs(Some(14))).info().residual,
-            Some(proxy::Residual::LocalNetwork)
+        assert!(
+            Registry::on_os(ON, Os::MacOs(Some(14)))
+                .info()
+                .agent_widgets_eligibility
+                .contains("dns-prefetch")
         );
-        assert_eq!(Registry::on_os(ON, Os::Windows).info().residual, None);
+        let windows = Registry::on_os(ON, Os::Windows);
+        assert!(windows.register(Source::Agent, "w", 1, "<p>x</p>").is_ok());
+        assert!(proxy::running().is_some(), "registering started the proxy");
+        let info = windows.info();
+        assert_eq!(info.agent_widgets_eligibility, "eligible");
+        assert_eq!(info.residual, None);
         let json = serde_json::to_value(Registry::on_os(ON, Os::MacOs(Some(14))).info()).unwrap();
-        assert_eq!(json["residual"], "local-network");
-        assert_eq!(json["agentWidgetsEligibility"], "eligible");
+        assert_eq!(json["residual"], "dns-prefetch-leak");
+        assert!(
+            json["agentWidgetsEligibility"]
+                .as_str()
+                .unwrap()
+                .starts_with("ineligible: ")
+        );
     }
 
     #[test]

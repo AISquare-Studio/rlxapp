@@ -268,8 +268,10 @@ jobs:
       # RLX_PROBE_STRICT=1 makes every gate check fail the run, whatever the agent-made widgets
       # switch says, so the widgets webview's network isolation (its deny-all proxy,
       # src-tauri/src/widget_host/proxy.rs) must hold on every OS: each side's preconnect to
-      # every target must reach only the proxy, and no widget name may be looked up. On macOS
-      # the owner-accepted residual (this Mac, and link-local IPv4) is recorded as info.
+      # every target must reach only the proxy (or, on Windows, nothing at all, by a netstat
+      # witness), and no widget name may be looked up. On macOS the local-network residual
+      # (this Mac, and link-local IPv4) is recorded as info, and the dns-prefetch lookups are
+      # the known reason macOS isn't eligible: a gate that doesn't fail the run on its own.
       - name: Native e2e (xvfb)
         if: runner.os == 'Linux' && hashFiles('src-tauri/Cargo.toml') != ''
         env:

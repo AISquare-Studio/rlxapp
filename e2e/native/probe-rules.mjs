@@ -12,12 +12,18 @@ const FRAME_NAVIGATION = new Set(["navigate", "ping-target", "meta-refresh", "to
 
 /**
  * Reach targets (src-tauri/src/e2e/reach.rs) that go past the deny-all proxy on macOS 14+:
- * this Mac (loopback, `localhost`, its own LAN address) and link-local IPv4. The owner
- * accepted them, with a warning in the "Custom HTML widgets" opt-in
- * (src-tauri/src/widget_host/proxy.rs). Every other target is a gate on macOS too.
+ * this Mac (loopback, `localhost`, its own LAN address) and link-local IPv4. Measured and
+ * recorded (src-tauri/src/widget_host/proxy.rs); every other target is a gate on macOS too.
  */
 const MACOS_RESIDUAL = new Set(["loopback-v4", "localhost", "loopback-v6", "own-lan-address", "link-local-v4"]);
-const RESIDUAL = "owner-accepted macOS residual (warned)";
+const RESIDUAL = "macOS local-network residual (measured)";
+
+/**
+ * A gate that fails on macOS for a reason the owner has recorded: WebKit resolves
+ * `dns-prefetch` names outside the proxy, which is why no Mac is eligible. It stays a gate
+ * (⛔, it keeps macOS off), but doesn't fail a strict run; every other gate still does.
+ */
+const MACOS_DNS_PREFETCH = "the known reason macOS isn't eligible: WebKit resolves dns-prefetch names outside the proxy";
 
 /** The probe's sides that sit behind the proxy, as reach.rs names them, with their labels. */
 const SIDES = [
@@ -55,7 +61,7 @@ export function evaluate(report, { stderr = "" } = {}) {
   const agentOn = String(report?.policy?.agentWidgets ?? "") === "on";
   const strict = process.env.RLX_PROBE_STRICT === "1";
   for (const c of checks) {
-    if (c.gate && !c.ok) c.blocking = agentOn || strict;
+    if (c.gate && !c.ok) c.blocking = agentOn || (strict && !c.known);
     else if (!c.ok) c.blocking = true;
   }
   return checks;
@@ -67,6 +73,10 @@ export function agentVerdict(checks) {
     return { mayTurnOn: false, why: "this OS has no widget webview in v0", noWebview: true };
   }
   const failing = checks.filter((c) => !c.ok);
+  const ineligible = checks.find((c) => c.ineligible);
+  if (ineligible) {
+    return { mayTurnOn: false, ineligible: true, why: [ineligible.detail, ...failing.map((c) => c.id)].join("; ") };
+  }
   return failing.length === 0
     ? { mayTurnOn: true, why: "every check passed" }
     : { mayTurnOn: false, why: failing.map((c) => c.id).join("; ") };
@@ -145,7 +155,7 @@ function evaluateChecks(report, stderr) {
     );
     const silentDetail = silent.length === 0 ? "0 connections" : `${silent.length} TCP connection(s) that sent nothing: ${summarizeHits(silent)}`;
     if (report.os === "macos") {
-      // The owner-accepted macOS residual: Network.framework never proxies loopback, so a
+      // The macOS local-network residual: Network.framework never proxies loopback, so a
       // preconnect can still open a connection to a port on this Mac. The reach rows below
       // gate every other destination there.
       checks.push({
@@ -200,6 +210,18 @@ function evaluateChecks(report, stderr) {
   if (probed) check(mainControl, mainPreconnects >= 1, mainDetail);
   else info(mainControl, `${mainDetail} (no widgets webview, so no proxy here)`);
   check("main CSP blocks frames", String(main.frameSrc ?? "").startsWith("blocked"), String(main.frameSrc));
+
+  // Where the policy records a residual (macOS: the DNS-prefetch leak), this OS isn't
+  // eligible, whatever the probe shows.
+  if (policy.residual) {
+    checks.push({
+      id: "agent-made widgets eligibility (policy)",
+      ok: true,
+      info: true,
+      ineligible: true,
+      detail: `${policy.agentWidgetsEligibility ?? "ineligible"} (residual: ${policy.residual})`,
+    });
+  }
 
   // The per-OS switch, through the product API.
   const agentRegister = String(report.switch?.agentRegister ?? "");
@@ -476,9 +498,11 @@ function dnsQueries(n) {
  * https. A target reaches only the proxy when the proxy's log names its authority (or, for an
  * http preconnect through Chromium's proxy, an untagged proxy connection lines up with it in
  * time) and nothing past the proxy saw it: the side's reach listener, for this host's own
- * addresses, and the DNS listener, for the probe's zone. On macOS the owner-accepted residual
- * is recorded as info; every other pair is a gate. Main's own targets must never reach the
- * proxy, and its zone name is the DNS route's positive control.
+ * addresses, and the DNS listener, for the probe's zone. On Windows a pair nothing saw at all
+ * also passes, given the netstat witness. On macOS the local-network residual is recorded as
+ * info, and the dns-prefetch lookups are a known gate failure; every other pair is a gate.
+ * Main's own targets must never reach the proxy, and its zone name is the DNS route's
+ * positive control.
  */
 function reachChecks(report, checks, { check, gate, info }) {
   const macos = report.os === "macos";
@@ -498,6 +522,28 @@ function reachChecks(report, checks, { check, gate, info }) {
   };
   const residual = (id) => macos && MACOS_RESIDUAL.has(id);
 
+  // The netstat witness (Windows, from probe.mjs): TCP connection attempts off this host,
+  // matched by port, since every reach attempt off this host has a port of its own. Main's
+  // direct attempt to its own TEST-NET address is its positive control. With it, a pair
+  // that nothing saw at all (no CONNECT, no direct connection, no attempt, no lookup) went
+  // nowhere: WebView2 sends most of the widgets' preconnects nowhere behind the proxy.
+  const synSent = (report.netstat?.synSent ?? []).map((line) => {
+    const [at, remote] = String(line).split(" ");
+    return { at: Number(at), remote, port: Number(/:(\d+)$/.exec(String(remote))?.[1]) };
+  });
+  const mainTestNet = (plans.main ?? []).filter((a) => a.id === "test-net");
+  const witnessed = mainTestNet.filter((a) => synSent.some((s) => authorityKey(s.remote) === authorityKey(a.authority)));
+  const witness = !macos && witnessed.length > 0;
+  if (!macos && mainTestNet.length > 0) {
+    check(
+      "netstat witness: main's direct connection attempt to its TEST-NET address is seen (positive control)",
+      witness,
+      report.netstat
+        ? `${report.netstat.samples} samples, ${synSent.length} SYN_SENT endpoint(s); main's: ${witnessed.map((a) => a.authority).join(", ") || "none seen"}`
+        : "no netstat samples in the report",
+    );
+  }
+
   // Untagged proxy connections go, in time order, to the http preconnects no log line names:
   // first each to the one whose slot (until the next attempt, 250 ms on) it falls in, then
   // any left over to one up to 2 s before it. The sides run one after the other.
@@ -510,7 +556,8 @@ function reachChecks(report, checks, { check, gate, info }) {
     const next = widgetAttempts[index + 1]?.attempt.at ?? attempt.at + 250;
     const direct = attempt.class === "on-host" ? reachHits[side].filter((h) => h.at >= attempt.at - 20 && h.at < next - 20) : [];
     const looked = queries.filter((q) => q.name === String(attempt.host).toLowerCase());
-    const found = { named, untagged: null, direct, looked };
+    const syn = synSent.filter((s) => s.port === Number(attempt.port));
+    const found = { named, untagged: null, direct, looked, syn };
     evidence.set(attempt, found);
     if (!named && attempt.rel === "preconnect" && attempt.scheme === "http" && !residual(attempt.id)) unnamed.push({ attempt, found, until: next - 20 });
   });
@@ -543,15 +590,20 @@ function reachChecks(report, checks, { check, gate, info }) {
           parts.push(`${name}: not attempted`);
           continue;
         }
-        const { named, untagged, direct, looked } = evidence.get(attempt);
+        const { named, untagged, direct, looked, syn } = evidence.get(attempt);
         const seen = [];
         if (target.rel === "preconnect") {
           if (named) seen.push(`CONNECT ${target.authority}`);
           else if (untagged !== null) seen.push(`a proxy connection at +${untagged - attempt.at} ms (an http preconnect through a proxy sends nothing)`);
+          else if (witness && direct.length === 0 && syn.length === 0 && looked.length === 0) seen.push("seen by nothing (no CONNECT, no direct connection or attempt, no lookup)");
           else {
             ok = false;
-            seen.push(direct.length > 0 || residual(id) ? "not in the proxy log" : "not in the proxy log (went past it, or never left)");
+            seen.push(direct.length > 0 || syn.length > 0 || residual(id) ? "not in the proxy log" : "not in the proxy log (went past it, or never left)");
           }
+        }
+        if (syn.length > 0) {
+          ok = false;
+          seen.push(`direct: a connection attempt to ${syn.map((s) => s.remote).join(", ")}`);
         }
         if (direct.length > 0) {
           ok = false;
@@ -569,6 +621,8 @@ function reachChecks(report, checks, { check, gate, info }) {
       const detail = parts.join(" · ");
       if (residual(id)) {
         checks.push({ id: `${rowId}: ${RESIDUAL}`, ok: true, info: true, residual: true, detail });
+      } else if (macos && id === "dns-prefetch") {
+        checks.push({ id: `${rowId} reaches only the deny-all proxy`, ok, gate: true, known: MACOS_DNS_PREFETCH, detail: ok ? detail : `${detail} (${MACOS_DNS_PREFETCH})` });
       } else {
         gate(`${rowId} reaches only the deny-all proxy`, ok, detail);
       }
@@ -655,11 +709,11 @@ export function toMarkdown(title, checks) {
     "",
     verdict.noWebview
       ? "Agent-made widgets stay off: this OS has no widget webview in v0, so only the switch and main's checks apply."
-      : verdict.mayTurnOn
-        ? checks.some((c) => c.residual)
-          ? "Agent-made widgets: every gate passes here, so the owner may turn them on for this OS, with the warning for the owner-accepted residual (ℹ️ rows below)."
-          : "Agent-made widgets: the probe passes in full here, so the owner may turn them on for this OS."
-        : `Agent-made widgets must stay **off** on this OS. Failing: ${verdict.why}.`,
+      : verdict.ineligible
+        ? `Agent-made HTML widgets are **not eligible** on this OS (the owner's decision): ${verdict.why}.`
+        : verdict.mayTurnOn
+          ? "Agent-made widgets: the probe passes in full here, so the owner may turn them on for this OS."
+          : `Agent-made widgets must stay **off** on this OS. Failing: ${verdict.why}.`,
     "",
     "✅ pass · ❌ fail · ⛔ fail that keeps agent-made widgets off (the switch is off, so the run continues) · ℹ️ recorded only",
     "",

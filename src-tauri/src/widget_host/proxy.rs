@@ -14,17 +14,17 @@
 //! (Windows), and none of those has a proxy.
 //!
 //! # The OS-capability matrix
-//! Which OS gets the proxy, and so where agent-made widgets may ever be turned on. They stay
-//! off on every OS in v0 ([`super::policy`]). Turning them on is the owner's call, once the
-//! isolation probe passes on that OS under `RLX_PROBE_STRICT=1`. Registration also checks
-//! this at run time ([`ensure_eligible`]): no agent-made widget registers on a machine
-//! without the running proxy, whatever the switch says.
+//! Which OS gets the proxy, and where agent-made HTML widgets ("Custom HTML widgets") may
+//! ever be turned on. They stay off on every OS in v0 ([`super::policy`]). Turning them on is
+//! the owner's call, once the isolation probe passes on that OS under `RLX_PROBE_STRICT=1`.
+//! Registration also checks this at run time ([`ensure_eligible`]): no agent-made widget
+//! registers on a machine that isn't eligible, whatever the switch says.
 //!
-//! | OS | Widgets webview in v0 | Deny-all proxy | Agent-made widgets eligible |
+//! | OS | Widgets webview in v0 | Deny-all proxy | Agent-made HTML widgets eligible |
 //! | --- | --- | --- | --- |
-//! | macOS 14+ | yes | yes, on the widgets webview's own non-persistent `WKWebsiteDataStore` (Tauri's `macos-proxy`), except the residual below | yes, once the probe passes, with the residual shown as a warning ([`Residual::LocalNetwork`]) |
+//! | macOS 14+ | yes, built-ins only | yes, on the widgets webview's own non-persistent `WKWebsiteDataStore` (Tauri's `macos-proxy`), except the residual below | **no** (the owner's decision): WebKit resolves `dns-prefetch` names outside the proxy ([`Residual::DnsPrefetchLeak`]). Declarative widgets only, until rlx can turn DNS prefetching off for the widgets webview through a supported, safe path |
 //! | macOS 11-13, or a version that can't be read | yes, built-ins only | no: WebKit has no per-webview proxy before macOS 14 | no, never |
-//! | Windows 10/11 (WebView2) | no; the probe attaches one | yes: the widgets webview's own WebView2 environment and user-data folder, with `--proxy-server` and `--proxy-bypass-list=<-loopback>` | once the product attaches a widgets webview there and the probe passes |
+//! | Windows 10/11 (WebView2) | no; the probe attaches one | yes: the widgets webview's own WebView2 environment and user-data folder, with `--proxy-server`, `--proxy-bypass-list=<-loopback>` and no WebRTC UDP past it | yes, once the product attaches a widgets webview there and the probe passes strict |
 //! | Linux (WebKitGTK) | no: WebKitGTK can't place a child webview | in code: an ephemeral web context with a custom proxy; untested, since nothing attaches | no |
 //!
 //! On macOS 11-13 the built-ins still render in the widgets webview without a proxy. That is
@@ -33,12 +33,21 @@
 //! `SYSTEM_VERSION_COMPAT=1` it reads 10.16; that counts as unknown, so not eligible.
 //!
 //! # What the proxy doesn't cover
-//! Measured by the isolation probe on macOS 27.2: each side (the host page and a widget
-//! frame) preconnects to every target over `http://` and `https://`, the proxy's test-build
-//! log names each `CONNECT` it refused, and a listener on this Mac's own addresses sees each
-//! direct connection (src/e2e/reach.rs). CI repeats it on every run, on macOS and Windows.
-//! - **macOS 14+: the local network (the owner-accepted residual, warned in the opt-in).**
-//!   Network.framework never sends these to a proxy, and has no setting for it:
+//! Measured by the isolation probe on macOS 27.2 and on every CI run (macOS 26.7 and
+//! Windows): each side (the host page and a widget frame) preconnects to every target over
+//! `http://` and `https://`, the proxy's test-build log names each `CONNECT` it refused, a
+//! listener on this host's own addresses sees each direct connection, and a DNS listener sees
+//! each lookup of the probe's zone (src/e2e/reach.rs, dns.rs).
+//! - **macOS: DNS prefetch (why macOS isn't eligible).** WebKit resolves a
+//!   `<link rel=dns-prefetch>` name through the system resolver, outside the proxy: on
+//!   macOS 26.7.2 (CI) each side's prefetch name was looked up (A and AAAA). So a widget can
+//!   put data in a DNS name that reaches the internet's resolvers. Preconnect names are not
+//!   looked up: they go to the proxy as a `CONNECT`. WebKit has a setting for DNS prefetching,
+//!   but no public API reaches it (a private `WKPreferences` key, which needs `unsafe` code
+//!   this crate forbids). macOS 27.2 is unmeasured by the DNS listener (a local route needs
+//!   root); an mDNSResponder log check there saw no widget names.
+//! - **macOS 14+: the local network.** Network.framework never sends these to a proxy, and
+//!   has no setting for it (the owner accepted this residual before the DNS finding):
 //!   - **this Mac**: `127.0.0.1`, `localhost`, `::1` and the Mac's own LAN address. An http
 //!     preconnect opens an empty TCP connection. An https one sends a standard TLS
 //!     ClientHello (4 connections per preconnect), with no SNI for an IP literal and SNI
@@ -57,11 +66,12 @@
 //!   frame of the widgets webview. On Windows the widgets' WebView2 also gets
 //!   `--force-webrtc-ip-handling-policy=disable_non_proxied_udp`, so WebRTC there can only
 //!   go through the deny-all proxy; the probe checks it with `frames.js` skipped.
-//! - **DNS** the engine resolves outside its proxy settings (a `dns-prefetch`, say). On
-//!   macOS 27.2, mDNSResponder resolved none of the widgets' names behind the proxy, only
-//!   main's. CI measures it on every run: the probe's zone resolves through its own DNS
-//!   listener (`/etc/resolver` on macOS, an NRPT rule on Windows), and each side's names
-//!   must get 0 queries.
+//! - **Windows: nothing measured gets past it.** Behind the proxy the widgets' preconnects
+//!   produced nothing anywhere in CI: no `CONNECT` at the proxy (WebView2 appears to drop
+//!   them), no direct connection to this host, no TCP connection attempt off it (a `netstat`
+//!   witness, whose positive control is main's direct attempt to its own TEST-NET address),
+//!   and no DNS lookup (an NRPT rule routes the probe's zone to its listener). The probe gates
+//!   on each pair: in the proxy's log, or seen by nothing at all.
 
 use std::io;
 use std::net::{Ipv4Addr, TcpListener};
@@ -119,23 +129,34 @@ pub const fn support_for(os: Os) -> Support {
     }
 }
 
-/// What the deny-all proxy leaves open where it runs, as the isolation probe measured it (see
-/// the module docs). The UI shows it as a warning before anyone opts in to agent-made HTML
-/// widgets.
+/// What the deny-all proxy leaves open on an OS, as the isolation probe measured it (see the
+/// module docs), for the UI to explain why Custom HTML widgets aren't available there.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum Residual {
-    /// macOS 14+: a widget can still make the Mac open a TCP connection (and send a standard
-    /// TLS ClientHello, for https) to a port on this Mac, or to a link-local IPv4 address
-    /// (169.254/16) on the local network.
-    LocalNetwork,
+    /// macOS (every version): WebKit resolves `dns-prefetch` names outside the proxy, so a
+    /// widget can put data in a DNS name that reaches the internet's resolvers.
+    DnsPrefetchLeak,
 }
 
-/// The residual on `os`, where it has the proxy.
+/// The residual on `os`.
 pub const fn residual_for(os: Os) -> Option<Residual> {
+    match os {
+        Os::MacOs(_) => Some(Residual::DnsPrefetchLeak),
+        Os::Windows | Os::Linux => None,
+    }
+}
+
+/// Why macOS isn't eligible even with the proxy (the owner's decision on the measured leak).
+pub const MACOS_DNS_PREFETCH: &str = "WebKit resolves dns-prefetch names outside the deny-all proxy (measured on macOS 26.7), so macOS gets declarative widgets only";
+
+/// The matrix's last column: whether agent-made HTML widgets may ever run on `os`. Only
+/// behind the deny-all proxy, and never on macOS while WebKit's DNS prefetch leaks.
+pub const fn eligibility_for(os: Os) -> Result<(), &'static str> {
     match (os, support_for(os)) {
-        (Os::MacOs(_), Support::DenyAll) => Some(Residual::LocalNetwork),
-        _ => None,
+        (_, Support::Unavailable(reason)) => Err(reason),
+        (Os::MacOs(_), Support::DenyAll) => Err(MACOS_DNS_PREFETCH),
+        (Os::Windows | Os::Linux, Support::DenyAll) => Ok(()),
     }
 }
 
@@ -170,27 +191,21 @@ fn macos_major() -> Option<u32> {
     None
 }
 
-/// Whether agent-made widgets may run on `os`: only behind the deny-all proxy, which must be
+/// Whether agent-made widgets may run on `os` ([`eligibility_for`]), with the deny-all proxy
 /// running. Starts it if it hasn't started yet, and returns its port, or why not.
 pub fn ensure_eligible(os: Os) -> Result<u16, String> {
-    match support_for(os) {
-        Support::Unavailable(reason) => Err(reason.to_owned()),
-        Support::DenyAll => {
-            deny_all().map_err(|error| format!("the deny-all proxy couldn't start: {error}"))
-        }
-    }
+    eligibility_for(os)?;
+    deny_all().map_err(|error| format!("the deny-all proxy couldn't start: {error}"))
 }
 
 /// [`ensure_eligible`] without starting the proxy, for the policy the UI shows. The proxy
 /// starts when the widgets webview attaches; until then it counts as able to start, unless
 /// it already failed.
 pub fn eligibility(os: Os) -> Result<(), String> {
-    match (support_for(os), PROXY.get()) {
-        (Support::Unavailable(reason), _) => Err(reason.to_owned()),
-        (Support::DenyAll, Some(Err(error))) => {
-            Err(format!("the deny-all proxy couldn't start: {error}"))
-        }
-        (Support::DenyAll, _) => Ok(()),
+    eligibility_for(os)?;
+    match PROXY.get() {
+        Some(Err(error)) => Err(format!("the deny-all proxy couldn't start: {error}")),
+        _ => Ok(()),
     }
 }
 
@@ -343,7 +358,6 @@ mod tests {
                 matches!(support_for(Os::MacOs(old)), Support::Unavailable(_)),
                 "{old:?}"
             );
-            assert_eq!(residual_for(Os::MacOs(old)), None);
         }
         assert_eq!(support_for(Os::Windows), Support::DenyAll);
         assert_eq!(support_for(Os::Linux), Support::DenyAll);
@@ -353,26 +367,44 @@ mod tests {
                 .describe()
                 .starts_with("unavailable: ")
         );
-        assert_eq!(
-            residual_for(Os::MacOs(Some(14))),
-            Some(Residual::LocalNetwork)
-        );
+        // The DNS-prefetch leak is macOS's on every version; Windows has none measured.
+        for os in [
+            Os::MacOs(Some(13)),
+            Os::MacOs(Some(14)),
+            Os::MacOs(Some(27)),
+            Os::MacOs(None),
+        ] {
+            assert_eq!(residual_for(os), Some(Residual::DnsPrefetchLeak), "{os:?}");
+        }
         assert_eq!(residual_for(Os::Windows), None);
+        assert_eq!(residual_for(Os::Linux), None);
         assert_eq!(
-            serde_json::to_value(Residual::LocalNetwork).unwrap(),
-            "local-network"
+            serde_json::to_value(Residual::DnsPrefetchLeak).unwrap(),
+            "dns-prefetch-leak"
         );
     }
 
+    /// The owner's decision on the measured DNS-prefetch leak: no macOS is eligible, with or
+    /// without the proxy. Windows is, behind the running proxy.
     #[test]
-    fn only_a_machine_with_the_proxy_is_eligible() {
+    fn only_windows_and_linux_behind_the_proxy_are_eligible() {
         for os in [Os::MacOs(Some(13)), Os::MacOs(Some(10)), Os::MacOs(None)] {
             assert!(ensure_eligible(os).is_err(), "{os:?}");
             assert!(eligibility(os).is_err(), "{os:?}");
         }
-        let port = ensure_eligible(Os::MacOs(Some(14))).unwrap();
+        for os in [
+            Os::MacOs(Some(14)),
+            Os::MacOs(Some(26)),
+            Os::MacOs(Some(27)),
+        ] {
+            assert_eq!(eligibility_for(os), Err(MACOS_DNS_PREFETCH), "{os:?}");
+            assert_eq!(ensure_eligible(os), Err(MACOS_DNS_PREFETCH.to_owned()));
+            assert_eq!(eligibility(os), Err(MACOS_DNS_PREFETCH.to_owned()));
+        }
+        let port = ensure_eligible(Os::Windows).unwrap();
         assert_eq!(running(), Some(port));
-        assert_eq!(eligibility(Os::MacOs(Some(14))), Ok(()));
+        assert_eq!(eligibility(Os::Windows), Ok(()));
+        assert_eq!(eligibility_for(Os::Linux), Ok(()));
     }
 
     #[test]
