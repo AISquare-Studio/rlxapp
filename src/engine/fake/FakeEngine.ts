@@ -3,6 +3,8 @@
  * until RlxEngine (rlx 0.10.3's rlxd) exists. Nothing here touches the network, Claude Code,
  * rlx or a connector.
  */
+import { GMAIL as GMAIL_ID, GOOGLE_CALENDAR, GOOGLE_DRIVE, LINEAR, SLACK, connectorLabel, type ConnectorId } from "../../core/connectors.ts";
+import type { ClaudeMock, DemoControls } from "../demo.ts";
 import type {
   BoardTask,
   Connector,
@@ -12,7 +14,9 @@ import type {
   EngineStatus,
   FleetAgent,
   RunEvent,
+  RunFilter,
   RunId,
+  RunResult,
   RunRequest,
   RunState,
   RunSummary,
@@ -36,9 +40,9 @@ import {
   AGENT_WIDGET_HTML,
   BRIEFING,
 } from "./data.ts";
-import { AGENT_PREFIX, BRIEFING_ROLE, CHAT_PREFIX } from "../runs.ts";
+import { wantsBriefing } from "../runs.ts";
 
-export type ClaudeMock = "not-installed" | "signed-out" | "signed-in";
+export type { ClaudeMock } from "../demo.ts";
 
 interface RunRecord {
   req: RunRequest;
@@ -52,6 +56,7 @@ interface RunRecord {
   pending: string[];
   /** Milliseconds between this run's steps, if not the engine's. */
   stepMs?: number;
+  finishedAt?: number;
   /**
    * Finishes on its own timer (agent runs, chat turns, widget refreshes…). The task scheduler
    * must never pick it up: it would finish it with a scripted task's output instead.
@@ -73,7 +78,7 @@ const MAX_RUNNING_TASKS = 2;
 /** rlx's defaults: the service starts at login, and its tray icon is the colour '\'. */
 export const DEFAULT_HOST_SETTINGS: HostSettings = { startAtLogin: true, serviceTrayIcon: "color" };
 
-export class FakeEngine implements Engine, DeveloperEngine {
+export class FakeEngine implements Engine, DeveloperEngine, DemoControls {
   private readonly records = new Map<RunId, RunRecord>();
   private readonly changeListeners = new Set<() => void>();
   private claude: ClaudeMock = "signed-in";
@@ -93,7 +98,7 @@ export class FakeEngine implements Engine, DeveloperEngine {
     if (options.seed ?? true) this.seed();
   }
 
-  // ---- mock controls (FakeEngine only) -------------------------------------------------
+  // ---- DemoControls ----------------------------------------------------------------------
 
   /** Switches the mock Claude Code state shown during onboarding. */
   setClaudeState(state: ClaudeMock): void {
@@ -121,7 +126,7 @@ export class FakeEngine implements Engine, DeveloperEngine {
     return Promise.resolve({ kind: "ready", account: MOCK_ACCOUNT, plan: "Max" });
   }
 
-  /** Mock install: not installed → signed out, with progress. */
+  /** A mock install: not installed → signed out, with progress. */
   install(onProgress: (pct: number) => void): Promise<void> {
     return new Promise((resolve) => {
       let pct = 0;
@@ -160,33 +165,50 @@ export class FakeEngine implements Engine, DeveloperEngine {
   run(req: RunRequest): Promise<RunId> {
     if (this.records.has(req.id)) return Promise.reject(new Error(`run_exists: ${req.id}`));
     const record = this.create(req, "queued", this.now());
-    if (req.kind === "task" && !req.prompt.startsWith(CHAT_PREFIX) && !req.prompt.startsWith(AGENT_PREFIX)) {
+    if (req.kind === "task" && req.agentId === undefined) {
+      // The owner's task: the mock model follows a script for its prompt.
       record.pending = [...(TASK_SCRIPTS[record.title] ?? TASK_SCRIPTS.default ?? [])];
       this.schedule();
     } else {
       record.instant = true;
-      // An agent run takes a moment, so its "running" state shows; the briefing a little longer.
-      const delay = !req.prompt.startsWith(AGENT_PREFIX) ? 300 : req.prompt.includes(BRIEFING_ROLE) ? 2 * this.stepMs : this.stepMs;
+      // An agent's run takes a moment, so its "running" state shows; the briefing a little longer.
+      const delay = req.jobId === undefined ? 300 : wantsBriefing(req.outputSchema) ? 2 * this.stepMs : this.stepMs;
       this.later(record, delay, () => this.finishInstant(record));
     }
     this.changed();
     return Promise.resolve(req.id);
   }
 
-  runs(): Promise<RunSummary[]> {
-    return Promise.resolve(
-      [...this.records.entries()]
-        .map(([id, r]) => ({
-          id,
-          kind: r.req.kind,
-          state: r.state,
-          title: r.title,
-          startedAt: r.startedAt,
-          lastSeq: r.events.length,
-          failureReason: r.failureReason,
-        }))
-        .sort((a, b) => b.startedAt - a.startedAt),
-    );
+  runs(filter: RunFilter = {}): Promise<RunSummary[]> {
+    const all = [...this.records.entries()]
+      .filter(([, r]) => filter.jobId === undefined || r.req.jobId === filter.jobId)
+      .map(([id, r]) => this.summary(id, r))
+      .sort((a, b) => b.startedAt - a.startedAt);
+    return Promise.resolve(filter.limit === undefined ? all : all.slice(0, filter.limit));
+  }
+
+  getRun(run: RunId): Promise<RunResult | null> {
+    const record = this.records.get(run);
+    if (!record) return Promise.resolve(null);
+    const finished = [...record.events].reverse().find((e) => e.event.type === "finished")?.event;
+    const ended = finished?.type === "finished" ? { status: finished.status, output: finished.output, finishedAt: record.finishedAt } : {};
+    return Promise.resolve({ ...this.summary(run, record), ...ended });
+  }
+
+  private summary(id: RunId, r: RunRecord): RunSummary {
+    return {
+      id,
+      kind: r.req.kind,
+      state: r.state,
+      title: r.title,
+      startedAt: r.startedAt,
+      lastSeq: r.events.length,
+      failureReason: r.failureReason,
+      jobId: r.req.jobId,
+      agentId: r.req.agentId,
+      loud: r.req.loud,
+      account: r.req.account,
+    };
   }
 
   attach(run: RunId, fromSeq: number, onEvent: (event: Seq<RunEvent>) => void): Unsubscribe {
@@ -294,6 +316,7 @@ export class FakeEngine implements Engine, DeveloperEngine {
   }
 
   private emit(record: RunRecord, event: RunEvent): void {
+    if (event.type === "finished") record.finishedAt = this.now();
     const seq: Seq<RunEvent> = { seq: record.events.length + 1, event };
     record.events.push(seq);
     for (const listener of record.listeners) listener(seq);
@@ -312,7 +335,7 @@ export class FakeEngine implements Engine, DeveloperEngine {
     for (const listener of this.changeListeners) listener();
   }
 
-  private mountedConnectors(record: RunRecord): [string, "connected"][] {
+  private mountedConnectors(record: RunRecord): [ConnectorId, "connected"][] {
     return record.req.mount.kind === "connectors"
       ? record.req.mount.connectors.map((c) => [c, "connected"] as [string, "connected"])
       : [];
@@ -340,7 +363,7 @@ export class FakeEngine implements Engine, DeveloperEngine {
     const next = record.pending.shift();
     if (next === undefined) {
       record.state = "done";
-      const output = record.title.startsWith(AGENT_PREFIX)
+      const output = record.req.agentId !== undefined
         ? { outcome: "Posted this week's pipeline notes", modelTurn: true }
         : { status: "done", summary: record.title };
       this.emit(record, { type: "finished", status: "done", output });
@@ -361,9 +384,10 @@ export class FakeEngine implements Engine, DeveloperEngine {
         manifest: { schemaVersion: 1, id: `agent-${record.req.id.slice(0, 6)}`, version: 1, title: record.title },
         html: AGENT_WIDGET_HTML,
       };
-    } else if (record.req.prompt.startsWith(AGENT_PREFIX)) {
-      const id = record.req.prompt.slice(AGENT_PREFIX.length).split(/\s/)[0] ?? "";
-      if (record.req.prompt.includes(BRIEFING_ROLE)) {
+    } else if (record.req.jobId !== undefined) {
+      // An agent's job fired: the mock does what that agent does.
+      const id = record.req.agentId ?? "";
+      if (wantsBriefing(record.req.outputSchema)) {
         for (const line of ["Read Meetings, Gmail and Slack outcomes.", "Merged 2 duplicates.", "Re-prioritized 9 items."]) {
           this.emit(record, { type: "text", delta: line });
         }
@@ -374,15 +398,15 @@ export class FakeEngine implements Engine, DeveloperEngine {
       } else {
         output = { outcome: "Fetched, nothing new, no Claude usage", modelTurn: false };
       }
-    } else if (connector.includes("Slack")) {
+    } else if (connector === SLACK) {
       // Each interval fetches with no model turn; Claude reviews only what's new.
       output = { ...SLACK_DIGEST, reviewed: this.slackNew };
       this.slackNew = 0;
-    } else if (connector.includes("Gmail")) {
+    } else if (connector === GMAIL_ID) {
       output = GMAIL;
-    } else if (connector.includes("Linear")) {
+    } else if (connector === LINEAR) {
       output = LINEAR_FEED;
-    } else if (/pull request/i.test(record.req.prompt)) {
+    } else if (record.req.kind === "widget_refresh" && /pull request/i.test(record.req.prompt)) {
       output = OPEN_PRS;
     } else if (record.req.kind === "parse_instruction") {
       output = parseInstruction(record.req.prompt);
@@ -402,14 +426,15 @@ export class FakeEngine implements Engine, DeveloperEngine {
   private seed(): void {
     const minute = 60_000;
     const base = this.now();
-    const mk = (title: string, state: RunState, agoMin: number, kind: RunRequest["kind"] = "task") => {
+    const mk = (title: string, state: RunState, agoMin: number, extra: Partial<RunRequest> = {}) => {
       const req: RunRequest = {
         id: `seed-${title.toLowerCase().replace(/[^a-z]+/g, "-")}`,
-        kind,
+        kind: "task",
         prompt: title,
-        mount: { kind: "connectors", connectors: ["claude.ai Slack"] },
+        mount: { kind: "connectors", connectors: [SLACK] },
         needsConnectors: [],
         persist: true,
+        ...extra,
       };
       const record = this.create(req, state, base - agoMin * minute);
       return record;
@@ -433,8 +458,14 @@ export class FakeEngine implements Engine, DeveloperEngine {
     this.emit(needs, { type: "question", text: "Tom asks about clause 7. Should I accept it as written, or ask for a 30-day notice period?" });
 
     // The GTM agent is mid-run when the app opens, so the Agents section shows one running.
-    const gtm = mk(`${AGENT_PREFIX}gtm-agent GTM agent`, "queued", 6);
-    gtm.req = { ...gtm.req, mount: { kind: "connectors", connectors: ["Slack", "Gmail"] }, persist: false };
+    const gtm = mk("GTM agent", "queued", 6, {
+      prompt: "GTM agent\nReviews the pipeline and drafts the weekly go-to-market notes.",
+      jobId: "job-gtm-agent",
+      agentId: "gtm-agent",
+      loud: false,
+      mount: { kind: "connectors", connectors: [SLACK, GMAIL_ID] },
+      persist: false,
+    });
     gtm.stepMs = this.stepMs * 8;
     gtm.pending = [
       "Reading #sales and #gtm since Friday.",
@@ -462,7 +493,7 @@ export function parseInstruction(text: string): {
   role?: "briefing";
   purpose: string;
   name: string;
-  connectors: string[];
+  connectors: ConnectorId[];
   schedule: { kind: "weekdays" | "daily" | "interval"; at?: string; everyMin?: number };
   mode: "silent" | "loud";
   outputs: ("channel" | "widget" | "dashboard")[];
@@ -482,18 +513,18 @@ export function parseInstruction(text: string): {
       role: "briefing",
       purpose: "Gathers your agents' latest outcomes, removes duplicates, and re-prioritizes them into one briefing.",
       name: "Start of day",
-      connectors: ["Google Calendar", "Meet transcripts (Google Drive)", "Gmail", "Slack"],
+      connectors: [GOOGLE_CALENDAR, GOOGLE_DRIVE, GMAIL_ID, SLACK],
       schedule: { kind: weekdays || !/daily|every day/.test(lower) ? "weekdays" : "daily", at },
       mode: "loud",
       outputs: ["channel", "dashboard"],
       reply: "Here's what I'd set up. Change anything, then confirm.",
     };
   }
-  const connectors = ["Slack", "Gmail", "Linear", "Google Calendar"].filter((c) => lower.includes(c.toLowerCase().split(" ")[0] ?? ""));
+  const connectors = [SLACK, GMAIL_ID, LINEAR, GOOGLE_CALENDAR].filter((c) => lower.includes(connectorLabel(c).toLowerCase().split(" ")[0] ?? ""));
   return {
     purpose: text.trim(),
     name: "New agent",
-    connectors: connectors.length ? connectors : ["Slack"],
+    connectors: connectors.length ? connectors : [SLACK],
     schedule: { kind: weekdays ? "weekdays" : "daily", at },
     mode: "silent",
     outputs: ["channel"],

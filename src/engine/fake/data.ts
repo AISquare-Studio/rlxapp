@@ -1,11 +1,13 @@
 /** Mock data for FakeEngine. Every person here is a placeholder. */
+import { GMAIL as GMAIL_ID, GOOGLE_CALENDAR, GOOGLE_DRIVE, LINEAR, SLACK } from "../../core/connectors.ts";
+import type { BriefSource, Briefing } from "../runs.ts";
 import type { BoardTask, Connector, FleetAgent } from "../types.ts";
 
 export const MOCK_ACCOUNT = "sam.rivera@example.com";
 
 export const CONNECTORS: Connector[] = [
   {
-    id: "claude.ai Slack",
+    id: SLACK,
     status: "connected",
     tools: [
       { name: "mcp__claude_ai_Slack__slack_search_public", access: "read" },
@@ -14,7 +16,7 @@ export const CONNECTORS: Connector[] = [
     ],
   },
   {
-    id: "claude.ai Gmail",
+    id: GMAIL_ID,
     status: "connected",
     tools: [
       { name: "mcp__claude_ai_Gmail__search_threads", access: "read" },
@@ -23,7 +25,7 @@ export const CONNECTORS: Connector[] = [
     ],
   },
   {
-    id: "claude.ai Linear",
+    id: LINEAR,
     status: "connected",
     tools: [
       { name: "mcp__claude_ai_Linear__list_issues", access: "read" },
@@ -31,7 +33,7 @@ export const CONNECTORS: Connector[] = [
     ],
   },
   {
-    id: "claude.ai Google Calendar",
+    id: GOOGLE_CALENDAR,
     status: "needs-auth",
     tools: [{ name: "mcp__claude_ai_Google_Calendar__list_events", access: "read" }],
   },
@@ -310,48 +312,15 @@ export const PANE_LINES: Record<string, string[]> = {
   default: ["(no output yet)"],
 };
 
-/** A source link as the briefing cites it. */
-export interface BriefSource {
-  label: string;
-  connector: string;
-  url: string;
-}
-
-export interface BriefItem {
-  id: string;
-  text: string;
-  why?: string;
-  sources: BriefSource[];
-}
-
-/**
- * The Start of day agent's output: the Meetings, Gmail and Slack agents' latest outcomes,
- * de-duplicated (Priya's pricing sign-off came in on Slack and Gmail; it is one item) and
- * re-prioritized.
- */
-export interface Briefing {
-  summary: string;
-  doNow: BriefItem[];
-  today: BriefItem[];
-  waiting: BriefItem[];
-  checklist: string[];
-  promise: { text: string; due: string; meeting: string; sources: BriefSource[] };
-  draft: { to: string; subject: string; body: string; connector: string; context: string };
-  /** `draftTemplate` gets the owner's answer in place of `{answer}`. */
-  needsContext: { question: string; to: string; subject: string; connector: string; sources: BriefSource[]; draftTemplate: string };
-  /** The feeds it read, for the de-duplication count. */
-  read: { meetings: number; gmail: number; slack: number; merged: number };
-}
-
-const SLACK_DM: BriefSource = { label: "Slack DM from Priya Shah", connector: "Slack", url: "https://example.com/slack/s1" };
-const PRICING_MAIL: BriefSource = { label: "Email: “Pricing page copy”", connector: "Gmail", url: "https://example.com/gmail/g0" };
-const TOM_MAIL: BriefSource = { label: "Email: “Contract redlines, round 2”", connector: "Gmail", url: "https://example.com/gmail/g1" };
+const SLACK_DM: BriefSource = { label: "Slack DM from Priya Shah", connector: SLACK, url: "https://example.com/slack/s1" };
+const PRICING_MAIL: BriefSource = { label: "Email: “Pricing page copy”", connector: GMAIL_ID, url: "https://example.com/gmail/g0" };
+const TOM_MAIL: BriefSource = { label: "Email: “Contract redlines, round 2”", connector: GMAIL_ID, url: "https://example.com/gmail/g1" };
 const SYNC_NOTES: BriefSource = {
   label: "Weekly product sync transcript",
-  connector: "Meet transcripts (Google Drive)",
+  connector: GOOGLE_DRIVE,
   url: "https://example.com/drive/sync-notes",
 };
-const CAL: (label: string, id: string) => BriefSource = (label, id) => ({ label, connector: "Google Calendar", url: `https://example.com/calendar/${id}` });
+const CAL: (label: string, id: string) => BriefSource = (label, id) => ({ label, connector: GOOGLE_CALENDAR, url: `https://example.com/calendar/${id}` });
 
 export const BRIEFING: Briefing = {
   summary: "3 to do now, 4 today, 2 waiting on you. I merged 2 duplicates across Slack and Gmail.",
@@ -376,12 +345,12 @@ export const BRIEFING: Briefing = {
       id: "b5",
       text: "Say whether you own the press kit",
       why: "Marco asked in #launch",
-      sources: [{ label: "#launch message from Marco Diaz", connector: "Slack", url: "https://example.com/slack/s2" }],
+      sources: [{ label: "#launch message from Marco Diaz", connector: SLACK, url: "https://example.com/slack/s2" }],
     },
     {
       id: "b6",
       text: "Review Lena's roadmap draft v3",
-      sources: [{ label: "Email: “Roadmap draft v3”", connector: "Gmail", url: "https://example.com/gmail/g4" }],
+      sources: [{ label: "Email: “Roadmap draft v3”", connector: GMAIL_ID, url: "https://example.com/gmail/g4" }],
     },
     { id: "b7", text: "1:1 with Priya at 16:00", sources: [CAL("1:1 with Priya", "1on1")] },
   ],
@@ -389,12 +358,12 @@ export const BRIEFING: Briefing = {
     {
       id: "b8",
       text: "Aiko's intro to Ravi needs your availability",
-      sources: [{ label: "Email: “Intro: Ravi from Northwind”", connector: "Gmail", url: "https://example.com/gmail/g2" }],
+      sources: [{ label: "Email: “Intro: Ravi from Northwind”", connector: GMAIL_ID, url: "https://example.com/gmail/g2" }],
     },
     {
       id: "b9",
       text: "Lena's scope question in your #product thread",
-      sources: [{ label: "#product thread", connector: "Slack", url: "https://example.com/slack/s3" }],
+      sources: [{ label: "#product thread", connector: SLACK, url: "https://example.com/slack/s3" }],
     },
   ],
   checklist: ["Pricing copy sign-off (15:00)", "Reply to Tom on clause 7", "Block 30 min for the Q4 deck outline"],
@@ -408,15 +377,15 @@ export const BRIEFING: Briefing = {
     to: "Finance Team",
     subject: "Re: Q3 budget review moved to Thursday",
     body: "Thanks for the heads-up. I'll bring the updated forecast on Thursday.",
-    connector: "claude.ai Gmail",
+    connector: GMAIL_ID,
     context: "From your Start of day briefing",
   },
   needsContext: {
     question: "Aiko introduced you to Ravi from Northwind. When are you free to meet him this week?",
     to: "Aiko Tanaka",
     subject: "Re: Intro: Ravi from Northwind",
-    connector: "claude.ai Gmail",
-    sources: [{ label: "Email: “Intro: Ravi from Northwind”", connector: "Gmail", url: "https://example.com/gmail/g2" }],
+    connector: GMAIL_ID,
+    sources: [{ label: "Email: “Intro: Ravi from Northwind”", connector: GMAIL_ID, url: "https://example.com/gmail/g2" }],
     draftTemplate: "Thanks Aiko! Ravi, great to meet you. {answer} Let me know what works for you.",
   },
   read: { meetings: 2, gmail: 4, slack: 5, merged: 2 },

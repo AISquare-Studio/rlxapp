@@ -1,8 +1,8 @@
 import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { App } from "./App.tsx";
-import { FakeEngine } from "./engine/fake/FakeEngine.ts";
 import { browserPlatform } from "./platform/index.ts";
+import { fakeServices } from "./test/fakeServices.ts";
 import { RLX_MARK_PATHS } from "./brand/mark.ts";
 import { DEFAULT_SETTINGS, type Settings } from "./state/model.ts";
 
@@ -16,9 +16,17 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-async function renderApp(settings?: Settings, engine = new FakeEngine({ stepMs: 50 })) {
-  render(<App platform={browserPlatform} engine={engine} initialSettings={settings} />);
-  return engine;
+/** Everything this device has in its storage, as one string. */
+function storageDump(): string {
+  return Object.keys(localStorage)
+    .map((key) => `${key}=${localStorage.getItem(key)}`)
+    .join("\n");
+}
+
+async function renderApp(settings?: Settings) {
+  const services = fakeServices({ settings, stepMs: 50 });
+  render(<App platform={browserPlatform} {...services} />);
+  return services.engine;
 }
 
 describe("App", () => {
@@ -166,16 +174,17 @@ describe("App", () => {
 describe("budget measurement", () => {
   it("opens on Home and saves nothing when launched under the startup probe", async () => {
     const platform = { ...browserPlatform, appInfo: () => browserPlatform.appInfo().then((info) => ({ ...info, measuring: true })) };
-    render(<App platform={platform} engine={new FakeEngine({ stepMs: 50 })} />);
+    render(<App platform={platform} {...fakeServices({ stepMs: 50 })} />);
     expect(await screen.findByRole("heading", { level: 1, name: "Home" })).toBeTruthy();
-    expect(localStorage.getItem("rlx.settings.v1")).toBeNull();
+    expect(storageDump()).toBe("");
   });
 });
 
 describe("rlx service settings", () => {
   it("toggles Start rlx at login and the menu-bar icon through the engine, on by default", async () => {
-    const engine = new FakeEngine({ stepMs: 50 });
-    render(<App platform={browserPlatform} engine={engine} initialSettings={onboarded} />);
+    const services = fakeServices({ settings: onboarded, stepMs: 50 });
+    const { engine } = services;
+    render(<App platform={browserPlatform} {...services} />);
     fireEvent.click(within(await screen.findByRole("navigation", { name: "Navigation" })).getByRole("button", { name: "Settings" }));
     const login = (await screen.findByRole("switch", { name: "Start rlx at login" })) as HTMLInputElement;
     await vi.waitFor(() => expect(login.checked).toBe(true));
@@ -187,8 +196,8 @@ describe("rlx service settings", () => {
     // Another client of the same host changes it: the switch follows.
     await engine.updateHostSettings({ startAtLogin: true });
     await vi.waitFor(() => expect(login.checked).toBe(true));
-    // Nothing about the service is stored in the app's own settings.
-    expect(localStorage.getItem("rlx.settings.v1") ?? "").not.toMatch(/startAtLogin|serviceTrayIcon/);
+    // Nothing about the service is stored on this device.
+    expect(storageDump()).not.toMatch(/startAtLogin|serviceTrayIcon/);
   });
 });
 
@@ -202,7 +211,7 @@ describe("2-way split (owner amendment 4)", () => {
   }
 
   it("shows exactly the left pane and the centre, with one vertical divider, on every screen", async () => {
-    render(<App platform={browserPlatform} engine={new FakeEngine({ stepMs: 50 })} initialSettings={{ ...onboarded, devMode: true }} />);
+    render(<App platform={browserPlatform} {...fakeServices({ settings: { ...onboarded, devMode: true }, stepMs: 50 })} />);
     const nav = await screen.findByRole("navigation", { name: "Navigation" });
     const visit: [string, () => void][] = [
       ["Home", () => fireEvent.click(within(nav).getByRole("button", { name: "Dashboard" }))],
@@ -226,3 +235,57 @@ describe("2-way split (owner amendment 4)", () => {
     }
   });
 });
+
+describe("relaunch (core seam)", () => {
+  it("keeps the host's names, theme and agents, and this device's onboarding, across a relaunch", async () => {
+    const first = fakeServices({ settings: { ...DEFAULT_SETTINGS }, stepMs: 50 });
+    const view = render(<App platform={browserPlatform} {...first} />);
+    fireEvent.click(await screen.findByRole("button", { name: "Get started" }));
+    await screen.findByText("Signed in");
+    fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+    fireEvent.change(screen.getByLabelText("Agent name"), { target: { value: "Atlas" } });
+    fireEvent.change(screen.getByLabelText("Your name"), { target: { value: "Ada Park" } });
+    fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+    fireEvent.click(screen.getByRole("button", { name: "Go to Home" }));
+    fireEvent.click(within(await screen.findByRole("navigation", { name: "Navigation" })).getByRole("button", { name: "Settings" }));
+    fireEvent.click(screen.getByLabelText("Light"));
+    view.unmount();
+    first.core.dispose();
+
+    const again = fakeServices({ host: first.host, device: first.device, stepMs: 50 });
+    render(<App platform={browserPlatform} {...again} />);
+    expect(await screen.findByRole("heading", { level: 1, name: "Home" })).toBeTruthy();
+    expect(document.documentElement.dataset.theme).toBe("rlx-light");
+    expect(screen.getByText("Ada's space")).toBeTruthy();
+    fireEvent.click(within(screen.getByRole("navigation", { name: "Navigation" })).getByRole("button", { name: /^Approvals/ }));
+    expect(within(await screen.findByTestId("drafts")).getAllByTestId("sign-off")[0]?.textContent).toBe("— Atlas, Ada Park's AI Agent");
+  });
+});
+
+describe("this device's storage (core seam)", () => {
+  it("keeps no product state on the device: only its device-local settings", async () => {
+    await renderApp({ ...DEFAULT_SETTINGS });
+    // Onboard, naming the agent; then use the app: a sent draft, the theme, Developer mode and its engine home.
+    fireEvent.click(await screen.findByRole("button", { name: "Get started" }));
+    await screen.findByText("Signed in");
+    fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+    fireEvent.change(screen.getByLabelText("Agent name"), { target: { value: "Atlas" } });
+    fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+    fireEvent.click(screen.getByRole("button", { name: "Go to Home" }));
+    const nav = await screen.findByRole("navigation", { name: "Navigation" });
+    fireEvent.click(within(nav).getByRole("button", { name: /^Approvals/ }));
+    fireEvent.click(within(await screen.findByTestId("drafts")).getAllByRole("button", { name: /Approve and send/ })[0]!);
+    fireEvent.click(within(nav).getByRole("button", { name: "Settings" }));
+    fireEvent.click(screen.getByLabelText("Light"));
+    fireEvent.click(screen.getByRole("switch", { name: /Developer mode/ }));
+    const home = screen.getByLabelText(/Engine home/);
+    fireEvent.change(home, { target: { value: "~/.rlx-sandbox-2" } });
+    fireEvent.click(within(home.closest("form") as HTMLElement).getByRole("button", { name: "Save" }));
+
+    expect(document.documentElement.dataset.theme).toBe("rlx-light");
+    expect(Object.keys(localStorage)).toEqual(["rlx.device.v1"]);
+    expect(JSON.parse(localStorage.getItem("rlx.device.v1") ?? "{}")).toEqual({ onboarded: true, devMode: true, engineHome: "~/.rlx-sandbox-2" });
+    expect(storageDump()).not.toMatch(/Atlas|light|press kit|agentName|agents|sendModes|widgets|family|mode"/);
+  });
+});
+

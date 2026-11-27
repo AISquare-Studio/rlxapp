@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { SignOff } from "../brand/SignOff.tsx";
+import { connectorLabel } from "../core/connectors.ts";
 import { useApp } from "../state/context.ts";
 import type { Draft, StandingApproval } from "../state/model.ts";
 import { Icon } from "../ui/Icon.tsx";
@@ -44,7 +45,7 @@ export function Approvals() {
 }
 
 function Drafts() {
-  const { state, dispatch, toast, now } = useApp();
+  const { state, core, toast } = useApp();
   const [editing, setEditing] = useState<string | null>(null);
   const [text, setText] = useState("");
   const { agentName, ownerName } = state.settings;
@@ -54,7 +55,7 @@ function Drafts() {
       {state.drafts.map((draft) => (
         <li key={draft.id} className="card draft reveal-host">
           <div className="card__head">
-            <span className="badge">{draft.connector.replace(/^claude\.ai /, "")}</span>
+            <span className="badge">{connectorLabel(draft.connector)}</span>
             <strong>To {draft.destination}</strong>
             <span className="muted reveal">
               {ORIGIN[draft.origin]} · {time(draft.createdAt)}
@@ -88,7 +89,7 @@ function Drafts() {
                   type="button"
                   className="button button--primary"
                   onClick={() => {
-                    dispatch({ type: "draft-edit", id: draft.id, body: text });
+                    void core.editDraft(draft.id, text);
                     setEditing(null);
                   }}
                 >
@@ -104,7 +105,7 @@ function Drafts() {
                   type="button"
                   className="button button--primary"
                   onClick={() => {
-                    dispatch({ type: "draft-approve", id: draft.id, at: now() });
+                    void core.approveAndSend(draft.id);
                     toast(`Sent to ${draft.destination}`, "success");
                   }}
                 >
@@ -123,7 +124,7 @@ function Drafts() {
                     {
                       label: "Discard",
                       onSelect: () => {
-                        dispatch({ type: "draft-discard", id: draft.id });
+                        void core.discardDraft(draft.id);
                         toast("Draft discarded", "info");
                       },
                     },
@@ -139,7 +140,7 @@ function Drafts() {
 }
 
 function Standing() {
-  const { state, dispatch, toast } = useApp();
+  const { state, core, toast } = useApp();
   const [revoking, setRevoking] = useState<StandingApproval | null>(null);
   return (
     <>
@@ -147,7 +148,7 @@ function Standing() {
         {state.approvals.map((a) => (
           <li key={a.id} className={`card${a.status !== "active" ? " card--inactive" : ""}`}>
             <div className="card__head">
-              <span className="badge">{a.connector.replace(/^claude\.ai /, "")}</span>
+              <span className="badge">{connectorLabel(a.connector)}</span>
               <strong>{a.instruction}</strong>
             </div>
             <dl className="facts">
@@ -194,7 +195,7 @@ function Standing() {
                 type="button"
                 className="button button--danger"
                 onClick={() => {
-                  dispatch({ type: "approval-revoke", id: revoking.id });
+                  void core.revokeApproval(revoking.id);
                   setRevoking(null);
                   toast("Approval revoked", "info");
                 }}
@@ -223,7 +224,7 @@ function Activity() {
             <span className="badge badge--sent">Sent</span>
             <strong>To {item.destination}</strong>
             <span className="muted">
-              · {item.connector.replace(/^claude\.ai /, "")} · approved by {item.approvedBy} · {time(item.at)}
+              · {connectorLabel(item.connector)} · approved by {item.approvedBy} · {time(item.at)}
             </span>
           </div>
           {item.subject ? <div className="draft__subject">{item.subject}</div> : null}

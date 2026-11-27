@@ -1,15 +1,15 @@
 import { useState } from "react";
-import { useRunEvents, useRuns } from "../engine/hooks.ts";
-import { taskRuns } from "../engine/runs.ts";
+import type { PendingItem } from "../core/pending.ts";
 import { useApp } from "../state/context.ts";
 
 /**
  * What waits on the owner, in place on Home: a quiet one-line fold, shown only when something
- * does. Questions are answered right here; drafts link to Approvals.
+ * does. It reads the core's Pending list: run questions are answered right here; drafts link to
+ * Approvals.
  */
 export function NeedsYou() {
   const { state, navigate } = useApp();
-  const needs = taskRuns(useRuns()).filter((r) => r.state === "needs-you");
+  const needs = state.pending.filter((item) => item.kind === "question" && item.status === "open");
   const drafts = state.drafts.length;
   if (!needs.length && !drafts) return null;
   const parts = [
@@ -20,8 +20,8 @@ export function NeedsYou() {
     <details className="fold needs-you-fold" data-testid="needs-you">
       <summary>Needs you · {parts.join(", ")}</summary>
       <div className="needs-you-fold__body">
-        {needs.map((run) => (
-          <RunQuestion key={run.id} runId={run.id} title={run.title} />
+        {needs.map((item) => (
+          <RunQuestion key={item.id} item={item} />
         ))}
         {drafts ? (
           <button type="button" className="button button--sm" onClick={() => navigate({ name: "approvals", tab: "drafts" })}>
@@ -33,30 +33,27 @@ export function NeedsYou() {
   );
 }
 
-function RunQuestion({ runId, title }: { runId: string; title: string }) {
-  const { engine, toast } = useApp();
-  const events = useRunEvents(runId);
+function RunQuestion({ item }: { item: PendingItem }) {
+  const { core, toast } = useApp();
   const [answer, setAnswer] = useState("");
-  const question = [...events].reverse().find((e) => e.event.type === "question")?.event;
-  if (!question || question.type !== "question") return null;
   return (
     <div className="card-msg needs-context" data-testid="run-question">
       <div className="card-msg__head">
         <span className="badge badge--warning">Needs your answer</span>
-        <strong>{title}</strong>
+        <strong>{item.title}</strong>
       </div>
-      <p>{question.text}</p>
+      <p>{item.text}</p>
       <form
         className="composer"
         onSubmit={(e) => {
           e.preventDefault();
           const text = answer.trim();
           if (!text) return;
-          void engine.resume(runId, text).then(() => toast("Thanks. Picking it up again.", "success"));
+          void core.answerPending(item.id, { kind: "text", text }).then(() => toast("Thanks. Picking it up again.", "success"));
           setAnswer("");
         }}
       >
-        <input value={answer} onChange={(e) => setAnswer(e.target.value)} placeholder="Your answer" aria-label={`Answer: ${question.text}`} />
+        <input value={answer} onChange={(e) => setAnswer(e.target.value)} placeholder="Your answer" aria-label={`Answer: ${item.text}`} />
         <button type="submit" className="button button--sm button--primary" disabled={!answer.trim()}>
           Reply
         </button>

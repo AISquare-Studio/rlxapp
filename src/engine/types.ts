@@ -28,17 +28,39 @@ export interface Connector {
 /** Which tools a run mounts: none (`--tools "" --strict-mcp-config`), or named connectors. */
 export type Mount = { kind: "no_tools" } | { kind: "connectors"; connectors: string[] };
 
+/**
+ * Which Claude account a run uses: Auto (the core picks one where all the run's connectors are
+ * connected, then the one with the most headroom), or one the owner pinned (task #23).
+ */
+export type AccountChoice = { kind: "auto" } | { kind: "pinned"; account: string };
+
+export const AUTO_ACCOUNT: AccountChoice = { kind: "auto" };
+
 export interface RunRequest {
   /** Chosen by the core; also Claude Code's `--session-id`. */
   id: RunId;
   kind: RunKind;
   prompt: string;
   mount: Mount;
-  /** Must be "connected" in system/init before the first turn. */
+  /** Connector ids ("claude.ai Slack") that must be "connected" in system/init before the first turn. */
   needsConnectors: string[];
   outputSchema?: unknown;
   /** false = `--no-session-persistence`; only Tasks persist. */
   persist: boolean;
+  /**
+   * The job that fired this run: an agent's schedule (rlxd's `job_id`, echoed on `job.fired`).
+   * Absent for one-off runs: the owner's tasks, widget refreshes, and chat turns.
+   */
+  jobId?: string;
+  /**
+   * The app agent this run is for: its job's runs (with `jobId`) and its channel's chat turns
+   * (without). Opaque to rlxd. Agent identity never rides on the prompt.
+   */
+  agentId?: string;
+  /** The job's opaque `loud` flag, echoed on `run.done` / `run.needs_you` (hub decision B.5). */
+  loud?: boolean;
+  /** Which Claude account runs it; Auto when absent. */
+  account?: AccountChoice;
 }
 
 export interface ToolCall {
@@ -79,11 +101,34 @@ export interface RunSummary {
   id: RunId;
   kind: RunKind;
   state: RunState;
-  /** A display title, the prompt's first line. */
+  /** A display title, the prompt's first line. Only for showing: never parsed for identity. */
   title: string;
   startedAt: number;
   lastSeq: number;
   failureReason?: string;
+  /** Echoed from the RunRequest. */
+  jobId?: string;
+  agentId?: string;
+  loud?: boolean;
+  account?: AccountChoice;
+}
+
+/**
+ * One run as `run.get` returns it (hub decision A.1): its summary plus how it ended, durably,
+ * so an outcome survives an rlxd restart and a closed app can deliver it later.
+ */
+export interface RunResult extends RunSummary {
+  /** The final status, once it has finished. */
+  status?: RunStatus;
+  /** Its structured output, once done. */
+  output?: unknown;
+  finishedAt?: number;
+}
+
+/** `run.list`'s filters (hub decision A.1): one job's runs, newest first, at most `limit`. */
+export interface RunFilter {
+  jobId?: string;
+  limit?: number;
 }
 
 export type EngineStatus =
@@ -122,12 +167,16 @@ export interface Engine {
   /** The protocol-version handshake. */
   hello(): Promise<EngineInfo>;
   status(): Promise<EngineStatus>;
+  /** Installs Claude Code (not-installed → signed-out), reporting progress from 0 to 100. */
+  install(onProgress: (pct: number) => void): Promise<void>;
   /** Streams open-url, waiting, then signed-in or error. */
   signIn(onStep: (step: SignInStep) => void): Promise<void>;
   connectors(): Promise<Connector[]>;
   run(req: RunRequest): Promise<RunId>;
-  /** Everything the engine knows, live or ended. */
-  runs(): Promise<RunSummary[]>;
+  /** Everything the engine knows, live or ended, newest first; or one job's runs. */
+  runs(filter?: RunFilter): Promise<RunSummary[]>;
+  /** One run and how it ended (`run.get`); null if the engine doesn't know it. */
+  getRun(run: RunId): Promise<RunResult | null>;
   /** Replays a run's events from `fromSeq`, then follows live. */
   attach(run: RunId, fromSeq: number, onEvent: (event: Seq<RunEvent>) => void): Unsubscribe;
   /** Only for runs the engine reports dead or waiting on the owner. */

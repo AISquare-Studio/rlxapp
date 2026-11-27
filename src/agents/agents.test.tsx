@@ -1,8 +1,9 @@
 import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { App } from "../App.tsx";
-import { FakeEngine, parseInstruction } from "../engine/fake/FakeEngine.ts";
+import { parseInstruction } from "../engine/fake/FakeEngine.ts";
 import { browserPlatform } from "../platform/index.ts";
+import { fakeServices } from "../test/fakeServices.ts";
 import { agentStatus, nextWake, seedAgents } from "../state/agents.ts";
 import { DEFAULT_SETTINGS, type Settings } from "../state/model.ts";
 
@@ -12,9 +13,9 @@ beforeEach(() => localStorage.clear());
 afterEach(() => vi.useRealTimers());
 
 function renderApp(settings: Settings = onboarded, stepMs = 20) {
-  const engine = new FakeEngine({ stepMs });
-  render(<App platform={browserPlatform} engine={engine} initialSettings={settings} />);
-  return engine;
+  const services = fakeServices({ settings, stepMs });
+  render(<App platform={browserPlatform} {...services} />);
+  return services.engine;
 }
 
 /** Creates "Start of day" through the manager's DM, as the owner would. */
@@ -43,7 +44,7 @@ async function simulateNineInChannel() {
 async function confirmStartOfDay() {
   const card = await createStartOfDay();
   fireEvent.click(within(card).getByRole("button", { name: "Confirm" }));
-  await screen.findByText(/Start of day is scheduled/);
+  await within(screen.getByTestId("messages")).findByText(/Start of day is scheduled/);
 }
 
 describe("schedules", () => {
@@ -68,7 +69,7 @@ describe("schedules", () => {
   it("proposes Start of day from the owner's words, with suggested connectors, never a fixed list", () => {
     const proposal = parseInstruction("every weekday at 9 give me a start of day briefing");
     expect(proposal).toMatchObject({ name: "Start of day", role: "briefing", mode: "loud", schedule: { kind: "weekdays", at: "09:00" } });
-    expect(proposal.connectors).toEqual(["Google Calendar", "Meet transcripts (Google Drive)", "Gmail", "Slack"]);
+    expect(proposal.connectors).toEqual(["claude.ai Google Calendar", "claude.ai Google Drive", "claude.ai Gmail", "claude.ai Slack"]);
     expect(parseInstruction("daily at 5pm, a briefing").schedule).toEqual({ kind: "daily", at: "17:00" });
   });
 });
@@ -123,13 +124,13 @@ describe("Start of day", () => {
       "Slack",
     ]);
     fireEvent.click(within(card).getByRole("button", { name: "Remove Slack" }));
-    fireEvent.change(within(card).getByLabelText("Add a connector"), { target: { value: "Slack" } });
+    fireEvent.change(within(card).getByLabelText("Add a connector"), { target: { value: "claude.ai Slack" } });
     expect(within(chips).getAllByRole("listitem")).toHaveLength(4);
     expect((within(card).getByLabelText("Schedule") as HTMLSelectElement).value).toBe("weekdays");
     expect((within(card).getByLabelText("Time") as HTMLInputElement).value).toBe("09:00");
     expect((within(card).getByLabelText("Loud: notify and post") as HTMLInputElement).checked).toBe(true);
     fireEvent.click(within(card).getByRole("button", { name: "Confirm" }));
-    expect(await screen.findByText(/Start of day is scheduled for weekdays at 09:00/)).toBeTruthy();
+    expect(await within(screen.getByTestId("messages")).findByText(/Start of day is scheduled for weekdays at 09:00/)).toBeTruthy();
 
     fireEvent.click(screen.getByRole("button", { name: "Agents" }));
     const row = await screen.findByTestId("agent-row-start-of-day");

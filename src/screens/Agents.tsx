@@ -1,5 +1,6 @@
 import { AgentActions, LastRun, ModeChip, StatusChip } from "../agents/AgentDetails.tsx";
 import { useAgents } from "../agents/useAgents.ts";
+import { connectorLabel } from "../core/connectors.ts";
 import { useNow } from "../engine/hooks.ts";
 import { MANAGER_ID, agentStatus, scheduleLabel, wakeLabel } from "../state/agents.ts";
 import { useApp } from "../state/context.ts";
@@ -63,7 +64,7 @@ export function Agents() {
                     <ul className="connector-chips connector-chips--static" aria-label={`${agent.name}'s connectors`}>
                       {agent.connectors.map((c) => (
                         <li key={c} className="connector-chip">
-                          {c}
+                          {connectorLabel(c)}
                         </li>
                       ))}
                     </ul>

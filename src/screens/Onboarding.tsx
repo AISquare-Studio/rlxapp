@@ -1,18 +1,13 @@
 import { useCallback, useEffect, useState } from "react";
 import { RlxMark } from "../brand/RlxMark.tsx";
 import { SignOff } from "../brand/SignOff.tsx";
-import type { ClaudeMock } from "../engine/fake/FakeEngine.ts";
+import type { ClaudeMock } from "../engine/demo.ts";
 import type { EngineStatus } from "../engine/types.ts";
 import { useApp } from "../state/context.ts";
 
 const STEPS = ["Welcome", "Claude Code", "Your agent", "Done"] as const;
 
-export interface OnboardingProps {
-  /** FakeEngine's mock switch; absent with a real engine. */
-  claudeMock?: { get: () => ClaudeMock; set: (state: ClaudeMock) => void; install: (onProgress: (pct: number) => void) => Promise<void> };
-}
-
-export function Onboarding({ claudeMock }: OnboardingProps) {
+export function Onboarding() {
   const { state, updateSettings, navigate } = useApp();
   const [step, setStep] = useState(0);
   const [agentName, setAgentName] = useState(state.settings.agentName);
@@ -50,7 +45,7 @@ export function Onboarding({ claudeMock }: OnboardingProps) {
             </div>
           </section>
         ) : null}
-        {step === 1 ? <ClaudeStep mock={claudeMock} onNext={() => setStep(2)} onBack={() => setStep(0)} /> : null}
+        {step === 1 ? <ClaudeStep onNext={() => setStep(2)} onBack={() => setStep(0)} /> : null}
         {step === 2 ? (
           <section aria-label="Name your agent">
             <h1>Name your agent</h1>
@@ -105,8 +100,9 @@ const MOCK_LABEL: Record<ClaudeMock, string> = {
   "signed-in": "Signed in",
 };
 
-function ClaudeStep({ mock, onNext, onBack }: { mock?: OnboardingProps["claudeMock"]; onNext: () => void; onBack: () => void }) {
-  const { engine } = useApp();
+function ClaudeStep({ onNext, onBack }: { onNext: () => void; onBack: () => void }) {
+  // The mock state switch shows only with a fake engine's demo controls.
+  const { engine, demo: mock } = useApp();
   const [status, setStatus] = useState<EngineStatus | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
 
@@ -134,7 +130,7 @@ function ClaudeStep({ mock, onNext, onBack }: { mock?: OnboardingProps["claudeMo
                 value={value}
                 checked={current === value}
                 onChange={() => {
-                  mock.set(value);
+                  mock.setClaudeState(value);
                   reread();
                 }}
               />
@@ -154,7 +150,7 @@ function ClaudeStep({ mock, onNext, onBack }: { mock?: OnboardingProps["claudeMo
               disabled={busy !== null}
               onClick={() => {
                 setBusy("Installing… 0%");
-                void mock?.install((pct) => setBusy(`Installing… ${pct}%`)).then(() => {
+                void engine.install((pct) => setBusy(`Installing… ${pct}%`)).then(() => {
                   setBusy(null);
                   reread();
                 });

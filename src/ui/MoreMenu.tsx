@@ -10,12 +10,15 @@ export interface MenuItem {
 
 /**
  * The ⋯ menu: a card's secondary actions, so each card shows one primary action (calm rule).
- * Opens on click, Enter or Space; arrow keys move; Escape or a click outside closes it.
+ * Opens on click, Enter or Space; arrow keys move, Home and End jump to the first and last item;
+ * Escape or a click outside closes it. Choosing an item returns focus to the ⋯ button, so the
+ * keyboard never falls back to the page.
  */
 export function MoreMenu({ label, items }: { label: string; items: MenuItem[] }) {
   const [open, setOpen] = useState(false);
   const id = useId();
   const root = useRef<HTMLDivElement>(null);
+  const button = useRef<HTMLButtonElement>(null);
 
   useEffect(() => {
     if (!open) return undefined;
@@ -39,11 +42,14 @@ export function MoreMenu({ label, items }: { label: string; items: MenuItem[] })
     if (event.key === "Escape") {
       event.preventDefault();
       setOpen(false);
-      root.current?.querySelector<HTMLButtonElement>(".more-menu__button")?.focus();
+      button.current?.focus();
     } else if (event.key === "ArrowDown" || event.key === "ArrowUp") {
       event.preventDefault();
       const next = (at + (event.key === "ArrowDown" ? 1 : -1) + entries.length) % entries.length;
       entries[next]?.focus();
+    } else if (event.key === "Home" || event.key === "End") {
+      event.preventDefault();
+      entries[event.key === "Home" ? 0 : entries.length - 1]?.focus();
     } else if (event.key === "Tab") {
       setOpen(false);
     }
@@ -52,6 +58,7 @@ export function MoreMenu({ label, items }: { label: string; items: MenuItem[] })
   return (
     <div className="more-menu" ref={root} onKeyDown={onKeyDown}>
       <button
+        ref={button}
         type="button"
         className="icon-button icon-button--sm more-menu__button"
         aria-label={label}
@@ -72,6 +79,9 @@ export function MoreMenu({ label, items }: { label: string; items: MenuItem[] })
               className="more-menu__item"
               disabled={item.disabled}
               onClick={() => {
+                // Focus goes back to the ⋯ button before the list closes (a dialog the item
+                // opens takes it from there, and gives it back when it closes).
+                button.current?.focus();
                 setOpen(false);
                 item.onSelect();
               }}

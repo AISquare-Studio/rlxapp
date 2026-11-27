@@ -1,6 +1,8 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { Splash } from "./brand/Splash.tsx";
-import { FakeEngine } from "./engine/fake/FakeEngine.ts";
+import type { Core } from "./core/types.ts";
+import type { DemoControls } from "./engine/demo.ts";
+import type { DeveloperEngine, Engine } from "./engine/types.ts";
 import type { Platform } from "./platform/index.ts";
 import { Agents } from "./screens/Agents.tsx";
 import { Approvals } from "./screens/Approvals.tsx";
@@ -12,23 +14,28 @@ import { Runs } from "./screens/Runs.tsx";
 import { Settings } from "./screens/Settings.tsx";
 import { Shell } from "./shell/Shell.tsx";
 import { AppProvider } from "./state/AppProvider.tsx";
-import { loadSettings } from "./state/reducer.ts";
 import { useApp } from "./state/context.ts";
-import type { Settings as AppSettings } from "./state/model.ts";
 import { effectiveAccent, resolveTheme } from "./theme/themes.ts";
 import { useOsDark } from "./theme/useOsDark.ts";
 import "./App.css";
 
+/**
+ * The UI's seams, all interfaces: the composition root (main.tsx) chooses what implements them.
+ * Until rlxd ships, those are fakes with mock data.
+ */
 export interface AppProps {
   platform: Platform;
-  /** The engine to drive the UI; defaults to a FakeEngine with mock data. */
-  engine?: FakeEngine;
-  initialSettings?: AppSettings;
+  /** The app core: product state, the scheduler's follow-up, the send gate and storage. */
+  core: Core;
+  /** Agentic work: runs, Claude Code status, the rlx service's settings. */
+  engine: Engine;
+  /** Developer mode's reads: fleet, board, panes. */
+  developer: DeveloperEngine;
+  /** A fake engine's preview controls; absent with a real engine. */
+  demo?: DemoControls;
 }
 
-export function App({ platform, engine: given, initialSettings }: AppProps) {
-  const engine = useMemo(() => given ?? new FakeEngine(), [given]);
-  const demo = useMemo(() => ({ simulateNewSlack: (count?: number) => engine.simulateNewSlack(count) }), [engine]);
+export function App({ platform, core, engine, developer, demo }: AppProps) {
   const [boot, setBoot] = useState<{ measuring: boolean } | null>(null);
 
   useEffect(() => {
@@ -42,16 +49,15 @@ export function App({ platform, engine: given, initialSettings }: AppProps) {
   }, [engine, platform]);
 
   if (!boot) return <Splash />;
-  // A budget measurement opens on Home and saves nothing (scripts/measure-budgets.sh).
-  const settings = boot.measuring ? { ...(initialSettings ?? loadSettings()), onboarded: true } : initialSettings;
   return (
-    <AppProvider engine={engine} developer={engine} platform={platform} initialSettings={settings} demo={demo} persist={!boot.measuring}>
-      <Root engine={engine} />
+    <AppProvider core={core} engine={engine} developer={developer} platform={platform} demo={demo}>
+      <Root measuring={boot.measuring} />
     </AppProvider>
   );
 }
 
-function Root({ engine }: { engine: FakeEngine }) {
+/** `measuring`: a budget measurement opens on Home, past onboarding, and changes nothing (scripts/measure-budgets.sh). */
+function Root({ measuring }: { measuring: boolean }) {
   const { state, screen, navigate } = useApp();
   const osDark = useOsDark();
   const { family, mode, accent, density, devMode, onboarded } = state.settings;
@@ -70,17 +76,7 @@ function Root({ engine }: { engine: FakeEngine }) {
     if (devScreen && !devMode) navigate({ name: "home" });
   }, [devScreen, devMode, navigate]);
 
-  if (!onboarded) {
-    return (
-      <Onboarding
-        claudeMock={{
-          get: () => engine.claudeState(),
-          set: (s) => engine.setClaudeState(s),
-          install: (onProgress) => engine.install(onProgress),
-        }}
-      />
-    );
-  }
+  if (!onboarded && !measuring) return <Onboarding />;
 
   return (
     <Shell>

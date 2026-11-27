@@ -47,6 +47,10 @@ The UI talks to the core only through `src/platform/`. When the UI runs in a pla
 
 The UI runs on mock data through `FakeEngine` (`src/engine/fake/`), which implements the `Engine` interface from the architecture doc. The UI reaches agentic work only through that interface; `src/engine/adapter/native.ts` is the only module that calls into the Rust core.
 
+- `App` takes interfaces only: `Engine`, `DeveloperEngine`, optional `DemoControls` (the preview's mock switches) and `Core`. `src/main.tsx` is the composition root, the one place that builds the fakes.
+- `Core` (`src/core/types.ts`) owns the product state: settings, agents and their runs' outcomes, conversations, drafts and the send gate, standing approvals, activity and Pending. `FakeCore` (`src/core/fake/`) keeps the host's part in memory, as rlxd's settings API will; only device-local settings (`src/core/device.ts`) go to this device's storage.
+- Runs carry `jobId` and `agentId`; connectors have one id everywhere, the claude.ai server name (`src/core/connectors.ts`).
+
 - The app draws no tray icon: the one menu-bar / tray icon belongs to the rlx service (rlxd), whose menu has **Open rlx app**. Closing the window hides it (and the Dock icon on macOS) and keeps the app running for scheduled jobs; opening the app again, from the service tray, the Dock or a second launch, brings the same window back (single instance).
 - **Start rlx at login** (Settings › rlx service) is the service's login registration, set through the Engine; the app registers no login item of its own.
 - Agent-made widgets render in `<iframe sandbox="allow-scripts">` in the browser preview. In the app, the main window allows no frames; they render only in the widget host's `widgets` webview, and the host's policy keeps them off until the isolation probe passes (architecture §5.3). Built-ins render as React in the main window.

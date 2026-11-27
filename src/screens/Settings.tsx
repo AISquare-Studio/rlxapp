@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { SignOff } from "../brand/SignOff.tsx";
+import { connectorLabel } from "../core/connectors.ts";
 import { SANDBOX_HOME, engineHome, homeProblem } from "../engine/adapter/home.ts";
 import { useHostSettings } from "../engine/hooks.ts";
 import { useApp } from "../state/context.ts";
@@ -27,7 +28,7 @@ const THEME_MODES: { id: ThemeMode; label: string }[] = [
 ];
 
 export function Settings({ osDark }: { osDark: boolean }) {
-  const { state, updateSettings, dispatch, navigate } = useApp();
+  const { state, updateSettings, dispatch, navigate, core } = useApp();
   const s = state.settings;
   const [autoFor, setAutoFor] = useState<string | null>(null);
   const [typed, setTyped] = useState("");
@@ -40,7 +41,7 @@ export function Settings({ osDark }: { osDark: boolean }) {
       setTyped("");
       return;
     }
-    updateSettings({ sendModes: { ...s.sendModes, [connector]: mode } });
+    void core.setSendMode(connector, mode);
   };
 
   return (
@@ -62,7 +63,7 @@ export function Settings({ osDark }: { osDark: boolean }) {
         <p className="muted">How {s.agentName} may send on your behalf, per connector.</p>
         {CONNECTOR_NAMES.map((connector) => {
           const current = s.sendModes[connector] ?? "draft";
-          const name = connector.replace(/^claude\.ai /, "");
+          const name = connectorLabel(connector);
           return (
             <fieldset key={connector} className="send-mode">
               <legend>{name}</legend>
@@ -228,7 +229,7 @@ export function Settings({ osDark }: { osDark: boolean }) {
 
       {autoFor ? (
         <Modal
-          title={`Turn on Auto for ${autoFor.replace(/^claude\.ai /, "")}?`}
+          title={`Turn on Auto for ${connectorLabel(autoFor)}?`}
           tone="warning"
           onClose={() => setAutoFor(null)}
           footer={
@@ -241,7 +242,8 @@ export function Settings({ osDark }: { osDark: boolean }) {
                 className="button button--warning"
                 disabled={typed.trim().toUpperCase() !== "AUTO"}
                 onClick={() => {
-                  updateSettings({ sendModes: { ...s.sendModes, [autoFor]: "auto" } });
+                  // The core has the last word on Auto (its own dialog, once it has one).
+                  void core.setSendMode(autoFor, "auto");
                   setAutoFor(null);
                 }}
               >

@@ -1,12 +1,12 @@
-import { useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { AgentActions, AgentDetails, StatusChip } from "../agents/AgentDetails.tsx";
-import { nextId, useAgents } from "../agents/useAgents.ts";
+import { useAgents } from "../agents/useAgents.ts";
 import { CardView } from "../chat/Cards.tsx";
-import { newRunId, useNow } from "../engine/hooks.ts";
-import { CHAT_PREFIX } from "../engine/runs.ts";
+import { connectorLabel } from "../core/connectors.ts";
+import { useNow } from "../engine/hooks.ts";
 import { MANAGER_ID, agentStatus, type Agent } from "../state/agents.ts";
 import { useApp } from "../state/context.ts";
-import type { Message, Proposal } from "../state/model.ts";
+import type { Card, Message } from "../state/model.ts";
 import { Avatar } from "../ui/Avatar.tsx";
 import { CenterNav } from "../ui/CenterNav.tsx";
 import { Icon } from "../ui/Icon.tsx";
@@ -23,7 +23,7 @@ function time(at: number): string {
 /** A conversation: the manager's DM (the setup assistant) or an agent's channel. */
 export function Channel({ id }: { id: string }) {
   const { state } = useApp();
-  const agent = state.settings.agents.find((a) => a.id === id);
+  const agent = state.agents.find((a) => a.id === id);
   if (id !== MANAGER_ID && !agent) {
     return (
       <div className="channel">
@@ -34,58 +34,73 @@ export function Channel({ id }: { id: string }) {
   return <Conversation id={id} agent={agent} />;
 }
 
+/** What a screen reader hears for a card: its gist, never its whole content. */
+function spokenCard(card: Card): string {
+  switch (card.type) {
+    case "email-draft":
+      return "A draft for your approval.";
+    case "needs-context":
+      return `Needs your answer: ${card.question}`;
+    case "checklist":
+      return card.title;
+    case "priority":
+      return card.title;
+    case "promise":
+      return card.text;
+    case "proposal":
+      return `Proposal: ${card.proposal.name}, ${card.proposal.connectors.map(connectorLabel).join(", ")}`;
+  }
+}
+
+function spoken(message: Message): string {
+  return [message.text, message.card ? spokenCard(message.card) : ""].filter(Boolean).join(" ");
+}
+
+/**
+ * The channel's announcements (F10): each new message from the agent once it's final, never a
+ * reply while it streams, and never what was already there when the channel opened.
+ */
+export function MessageAnnouncer({ messages }: { messages: Message[] }) {
+  const announced = useRef<Set<string> | null>(null);
+  const [text, setText] = useState("");
+  useEffect(() => {
+    const finals = messages.filter((m) => m.from !== "owner" && !m.streaming);
+    if (announced.current === null) {
+      announced.current = new Set(finals.map((m) => m.id));
+      return;
+    }
+    const seen = announced.current;
+    const fresh = finals.filter((m) => !seen.has(m.id));
+    if (!fresh.length) return;
+    for (const m of fresh) seen.add(m.id);
+    setText(fresh.map(spoken).filter(Boolean).join(" "));
+  }, [messages]);
+  return (
+    <div className="visually-hidden" aria-live="polite" data-testid="messages-live">
+      {text}
+    </div>
+  );
+}
+
 function Conversation({ id, agent }: { id: string; agent?: Agent }) {
-  const { state, engine, dispatch, now, demo } = useApp();
+  const { state, core, demo } = useApp();
   const { running, simulateNine } = useAgents();
   const nowTick = useNow(30_000);
   const [text, setText] = useState("");
   const [busy, setBusy] = useState(false);
-  const messages = state.messages.filter((m) => m.channel === id);
+  const messages = useMemo(() => state.messages.filter((m) => m.channel === id), [state.messages, id]);
   const isManager = id === MANAGER_ID;
   const name = isManager ? "Manager" : (agent?.name ?? "");
   const { ownerName } = state.settings;
   const status = agent ? agentStatus(agent, running.has(agent.id), nowTick) : undefined;
-
-  const post = (message: Omit<Message, "id" | "channel" | "at">) => {
-    const full: Message = { id: nextId("m"), channel: id, at: now(), ...message };
-    dispatch({ type: "message-add", message: full });
-    return full.id;
-  };
 
   const send = async (value: string) => {
     const body = value.trim();
     if (!body || busy) return;
     setText("");
     setBusy(true);
-    post({ from: "owner", text: body });
-    if (isManager) {
-      // The manager turns what the owner said into a proposal card (a parse_instruction run).
-      const run = await engine.run({ id: newRunId(), kind: "parse_instruction", prompt: body, mount: { kind: "no_tools" }, needsConnectors: [], persist: false });
-      const off = engine.attach(run, 1, ({ event }) => {
-        if (event.type !== "finished") return;
-        off();
-        setBusy(false);
-        const output = event.output as (Proposal & { reply?: string }) | undefined;
-        if (event.status !== "done" || !output) {
-          post({ from: "agent", text: "Sorry, I couldn't work that out. Try saying what you want and when." });
-          return;
-        }
-        const { reply, ...proposal } = output;
-        post({ from: "agent", text: reply ?? "Here's what I'd set up." });
-        post({ from: "agent", card: { type: "proposal", id: nextId("p"), proposal, status: "proposed" } });
-      });
-      return;
-    }
-    // An agent's channel: a chat turn with that agent; its reply streams in.
-    const replyId = post({ from: "agent", text: "" });
-    const run = await engine.run({ id: newRunId(), kind: "task", prompt: `${CHAT_PREFIX}${body}`, mount: { kind: "no_tools" }, needsConnectors: [], persist: true });
-    const off = engine.attach(run, 1, ({ event }) => {
-      if (event.type === "text") dispatch({ type: "message-append", id: replyId, text: event.delta });
-      if (event.type === "finished") {
-        off();
-        setBusy(false);
-      }
-    });
+    // The manager turns it into a proposal card; an agent's channel gets a chat turn whose reply streams in.
+    await core.sendMessage(id, body).finally(() => setBusy(false));
   };
 
   return (
@@ -112,7 +127,7 @@ function Conversation({ id, agent }: { id: string; agent?: Agent }) {
           </details>
         ) : null}
       </div>
-      <ol className="messages" aria-label={`Messages in ${name}`} aria-live="polite" data-testid="messages">
+      <ol className="messages" aria-label={`Messages in ${name}`} data-testid="messages">
         {messages.length === 0 ? (
           <li className="messages__empty muted">
             {agent?.mode === "silent"
@@ -160,6 +175,7 @@ function Conversation({ id, agent }: { id: string; agent?: Agent }) {
         })}
         <li key={`end-${messages.length}`} className="messages__end" ref={(el) => el?.scrollIntoView?.({ block: "nearest" })} />
       </ol>
+      <MessageAnnouncer messages={messages} />
       {isManager && !busy && !messages.some((m) => m.from === "owner") ? (
         <div className="quick-replies" aria-label="Suggestions">
           {MANAGER_SUGGESTIONS.map((s) => (
