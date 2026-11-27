@@ -12,16 +12,19 @@ const FRAME_NAVIGATION = new Set(["navigate", "ping-target", "meta-refresh", "to
 
 /**
  * Reach targets (src-tauri/src/e2e/reach.rs) that go past the deny-all proxy on macOS 14+:
- * this Mac (loopback, `localhost`, its own LAN address) and link-local IPv4. Measured and
- * recorded (src-tauri/src/widget_host/proxy.rs); every other target is a gate on macOS too.
+ * this Mac (loopback, `localhost`, and on macOS 27.2 its own LAN address, which went to the
+ * proxy on 26.7.2) and link-local IPv4. Measured and recorded
+ * (src-tauri/src/widget_host/proxy.rs); every other target is a gate on macOS too.
  */
 const MACOS_RESIDUAL = new Set(["loopback-v4", "localhost", "loopback-v6", "own-lan-address", "link-local-v4"]);
 const RESIDUAL = "macOS local-network residual (measured)";
 
 /**
- * A gate that fails on macOS for a reason the owner has recorded: WebKit resolves
- * `dns-prefetch` names outside the proxy, which is why no Mac is eligible. It stays a gate
- * (⛔, it keeps macOS off), but doesn't fail a strict run; every other gate still does.
+ * A gate that fails for a reason the owner has recorded in the policy (`residual:
+ * "dns-prefetch-leak"`, macOS): WebKit resolves `dns-prefetch` names outside the proxy, which
+ * is why no Mac is eligible. It stays a gate (⛔, it keeps the OS off), but doesn't fail a
+ * strict run; every other gate still does. Without that residual in the policy, a lookup is
+ * an ordinary gate failure.
  */
 const MACOS_DNS_PREFETCH = "the known reason macOS isn't eligible: WebKit resolves dns-prefetch names outside the proxy";
 
@@ -532,7 +535,9 @@ function reachChecks(report, checks, { check, gate, info }) {
     "widgets-host": (listeners.reachHost?.hits ?? []).map(readReachHit),
     "widget-iframe": (listeners.reachIframe?.hits ?? []).map(readReachHit),
   };
+  const windows = report.os === "windows";
   const residual = (id) => macos && MACOS_RESIDUAL.has(id);
+  const knownDnsPrefetch = report.policy?.residual === "dns-prefetch-leak";
 
   // The netstat witness (Windows, from probe.mjs): TCP connection attempts off this host,
   // matched by port, since every reach attempt off this host has a port of its own. Main's
@@ -571,7 +576,9 @@ function reachChecks(report, checks, { check, gate, info }) {
     const syn = synSent.filter((s) => s.port === Number(attempt.port));
     const found = { named, untagged: null, direct, looked, syn };
     evidence.set(attempt, found);
-    if (!named && attempt.rel === "preconnect" && attempt.scheme === "http" && !residual(attempt.id)) unnamed.push({ attempt, found, until: next - 20 });
+    // Only Chromium (Windows) sends nothing on an http preconnect through a proxy; WebKit
+    // CONNECTs every one, so elsewhere an untagged connection credits nothing.
+    if (windows && !named && attempt.rel === "preconnect" && attempt.scheme === "http") unnamed.push({ attempt, found, until: next - 20 });
   });
   for (const pass of ["slot", "late"]) {
     for (const { attempt, found, until } of unnamed) {
@@ -633,8 +640,10 @@ function reachChecks(report, checks, { check, gate, info }) {
       const detail = parts.join(" · ");
       if (residual(id)) {
         checks.push({ id: `${rowId}: ${RESIDUAL}`, ok: true, info: true, residual: true, detail });
-      } else if (macos && id === "dns-prefetch") {
-        checks.push({ id: `${rowId} reaches only the deny-all proxy`, ok, gate: true, known: MACOS_DNS_PREFETCH, detail: ok ? detail : `${detail} (${MACOS_DNS_PREFETCH})` });
+      } else if (id === "dns-prefetch") {
+        const row = `${rowId}: no lookup outside the proxy`;
+        if (knownDnsPrefetch) checks.push({ id: row, ok, gate: true, known: MACOS_DNS_PREFETCH, detail: ok ? detail : `${detail} (${MACOS_DNS_PREFETCH})` });
+        else gate(row, ok, detail);
       } else {
         gate(`${rowId} reaches only the deny-all proxy`, ok, detail);
       }

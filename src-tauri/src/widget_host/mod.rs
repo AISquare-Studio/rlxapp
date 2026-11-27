@@ -645,11 +645,14 @@ pub fn host_call(function: HostFn, args: &[Value]) -> String {
 }
 
 /// The `widgets` webview may stay on the widget scheme and nothing else (§5.3). wry asks this
-/// for every navigation on macOS, but only for top-level ones on Windows. There the host
-/// CSP's frame-src keeps a frame on the scheme, a frame's navigation GET can reach only the
-/// deny-all proxy, and the probe's "can't navigate off the widget scheme" check fails CI if
-/// either slips. WebView2's `FrameNavigationStarting` isn't wired (it needs `unsafe` COM
-/// code, which this crate forbids); that is a precondition for turning Windows on.
+/// for every navigation on macOS, but only for top-level ones on Windows. WebView2's
+/// `FrameNavigationStarting` isn't wired (it needs `unsafe` COM code, which this crate
+/// forbids; descoped): on Windows the deny-all proxy meets that precondition. The host CSP's
+/// frame-src stops a frame's navigation off the scheme before any request, and a navigation
+/// GET that does go out reaches only the deny-all proxy. The probe's Windows run shows both
+/// (frame-src violations, the fixture's ack, 0 at its listener; the host page's navigate GET
+/// in the proxy's log), and its "can't navigate off the widget scheme" check fails CI if
+/// either slips.
 pub fn allow_navigation(url: &Url) -> bool {
     if matches!(url.as_str(), "about:blank" | "about:srcdoc") {
         return true;
@@ -957,6 +960,19 @@ mod tests {
                 .agent_widgets_eligibility
                 .contains("dns-prefetch")
         );
+        // Linux has the proxy in code, unmeasured: not eligible either.
+        let linux = Registry::on_os(ON, Os::Linux);
+        assert!(matches!(
+            linux.register(Source::Agent, "w", 1, "<p>x</p>"),
+            Err(RegisterError::NotEligible(_))
+        ));
+        assert!(
+            linux
+                .info()
+                .agent_widgets_eligibility
+                .starts_with("ineligible: ")
+        );
+        assert_eq!(linux.info().residual, None);
         let windows = Registry::on_os(ON, Os::Windows);
         assert!(windows.register(Source::Agent, "w", 1, "<p>x</p>").is_ok());
         assert!(proxy::running().is_some(), "registering started the proxy");

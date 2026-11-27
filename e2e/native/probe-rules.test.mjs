@@ -230,6 +230,18 @@ describe("isolation probe rules", () => {
     expect(passed(evaluate(report))).toBe(false);
   });
 
+  it("credits an untagged proxy connection to an http preconnect on Windows only", () => {
+    // WebKit CONNECTs every proxied preconnect, so on macOS a missing CONNECT fails even with
+    // an untagged connection right beside it.
+    const report = passingReport();
+    const target = report.host.reach.find((a) => a.id === "rfc1918-10" && a.scheme === "http");
+    report.proxy.log = report.proxy.log.filter((line) => !line.includes(`CONNECT ${target.authority} `));
+    report.proxy.log.push(`${target.at + 5} no data`);
+    const row = "host page → rfc1918-10 (10.255.255.1) reaches only the deny-all proxy";
+    expect(failing(evaluate(report))).toEqual([row]);
+    expect(evaluate(report).find((c) => c.id === row).detail).toMatch(/^http: not in the proxy log/);
+  });
+
   it("reads the proxy's log: CONNECT authorities with or without IPv6 brackets, and untagged connections", () => {
     expect(authorityKey("[fe80::77]:41014")).toBe("fe80::77:41014");
     expect(authorityKey("fe80::77:41014")).toBe("fe80::77:41014");
@@ -436,7 +448,7 @@ describe("isolation probe rules", () => {
     expect(checks.find((c) => c.id === control).detail).toBe(
       "1 DNS query for main.rlx-probe-dns.test; main's dns-prefetch name: 1 DNS query; 2 DNS queries in all",
     );
-    expect(checks.find((c) => c.id === "widget iframe → dns-prefetch (widget-iframe-prefetch.rlx-probe-dns.test) reaches only the deny-all proxy").detail).toBe(
+    expect(checks.find((c) => c.id === "widget iframe → dns-prefetch (widget-iframe-prefetch.rlx-probe-dns.test): no lookup outside the proxy").detail).toBe(
       "dns-prefetch: 0 DNS queries",
     );
     expect(checks.find((c) => c.id === "host page → dns-name (widgets-host.rlx-probe-dns.test) reaches only the deny-all proxy").detail).toBe(
@@ -446,7 +458,7 @@ describe("isolation probe rules", () => {
     // It stays a gate (⛔), but a strict run fails only on other gates.
     report.dns.queries.push("1 AAAA widget-iframe-prefetch.rlx-probe-dns.test", "1 A widget-iframe-prefetch.rlx-probe-dns.test");
     checks = strictly(() => evaluate(report));
-    const prefetch = "widget iframe → dns-prefetch (widget-iframe-prefetch.rlx-probe-dns.test) reaches only the deny-all proxy";
+    const prefetch = "widget iframe → dns-prefetch (widget-iframe-prefetch.rlx-probe-dns.test): no lookup outside the proxy";
     expect(failing(checks)).toEqual([prefetch]);
     expect(checks.find((c) => c.id === prefetch)).toMatchObject({ gate: true, blocking: false });
     expect(checks.find((c) => c.id === prefetch).detail).toBe(
@@ -464,6 +476,14 @@ describe("isolation probe rules", () => {
     const windows = passingReport("windows", { dns: true });
     windows.dns.queries.push("1 A widgets-host-prefetch.rlx-probe-dns.test");
     strictly(() => expect(passed(evaluate(windows))).toBe(false));
+    // The exemption comes from the policy's recorded residual, not the OS: a macOS report
+    // without it fails strict on the same lookup.
+    const unrecorded = passingReport("macos", { dns: true });
+    unrecorded.policy.residual = null;
+    unrecorded.dns.queries.push("1 A widget-iframe-prefetch.rlx-probe-dns.test");
+    checks = strictly(() => evaluate(unrecorded));
+    expect(checks.find((c) => c.id === prefetch)).toMatchObject({ ok: false, blocking: true });
+    expect(passed(checks)).toBe(false);
     // No query for main's name: the route doesn't work, and the run fails.
     const noRoute = passingReport("windows", { dns: true });
     noRoute.dns.queries = [];
