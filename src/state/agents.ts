@@ -26,6 +26,8 @@ export interface AgentRun {
   outcome: string;
   /** Whether the run took a model turn (Claude usage). */
   modelTurn: boolean;
+  /** The run it came from: an outcome is delivered once per run. */
+  runId?: string;
 }
 
 /**

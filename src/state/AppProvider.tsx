@@ -1,10 +1,10 @@
 import { useCallback, useLayoutEffect, useMemo, useReducer, useSyncExternalStore, type ReactNode } from "react";
-import type { Core, Surface } from "../core/types.ts";
+import type { Core, SettingsPatch, Surface } from "../core/types.ts";
 import type { DemoControls } from "../engine/demo.ts";
 import type { DeveloperEngine, Engine } from "../engine/types.ts";
 import type { Platform } from "../platform/index.ts";
 import { AppContext, type AppContextValue } from "./context.ts";
-import { signOffText, type Screen, type Settings, type Toast } from "./model.ts";
+import { signOffText, type Screen, type Toast } from "./model.ts";
 import { initialUiState, reducer } from "./reducer.ts";
 
 export interface AppProviderProps {
@@ -37,7 +37,7 @@ export function AppProvider({ core, engine, developer, platform, now = Date.now,
   useLayoutEffect(() => () => core.view(null), [core]);
 
   const navigate = useCallback((next: Screen) => dispatch({ type: "navigate", screen: next }), []);
-  const updateSettings = useCallback((patch: Partial<Settings>) => core.updateSettings(patch), [core]);
+  const updateSettings = useCallback((patch: SettingsPatch) => void core.updateSettings(patch), [core]);
   const toast = useCallback((text: string, tone: Toast["tone"] = "info") => {
     toastCounter += 1;
     const id = `toast-${toastCounter}`;

@@ -49,7 +49,7 @@ function RunQuestion({ item }: { item: PendingItem }) {
           e.preventDefault();
           const text = answer.trim();
           if (!text) return;
-          void core.answerPending(item.id, text).then(() => toast("Thanks. Picking it up again.", "success"));
+          void core.answerPending(item.id, { kind: "text", text }).then(() => toast("Thanks. Picking it up again.", "success"));
           setAnswer("");
         }}
       >

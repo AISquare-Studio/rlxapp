@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { AGENT_WIDGET_HTML } from "../engine/fake/data.ts";
-import { newRunId, useEngineData } from "../engine/hooks.ts";
+import { newRunId, useWidgetData } from "../engine/hooks.ts";
 import type { WidgetSource } from "../platform/index.ts";
 import type { WidgetBounds } from "../platform/widgetHost.ts";
 import { useApp } from "../state/context.ts";
+import type { WidgetInstance } from "../state/model.ts";
 import { Modal } from "../ui/Modal.tsx";
 import { tokensFor } from "../theme/tokensFor.ts";
 import { withColorScheme } from "./colorScheme.ts";
@@ -163,15 +164,10 @@ function HostedFrame({ id, version, title, data }: { id: string; version: number
   return <div className="agent-host-slot" ref={slot} data-testid="agent-widget-host-slot" aria-label={title} role="region" />;
 }
 
-/** The built-in example of an agent-made widget: open pull requests per repository. */
-export function AgentWidget({ id, title, html }: { id: string; title: string; html?: string }) {
-  const { data } = useEngineData<unknown>(
-    "widget_refresh",
-    "Count open pull requests per repository, and how many are in review",
-    { kind: "no_tools" },
-    15,
-  );
-  return <AgentFrame id={id} version={1} title={title} html={html ?? AGENT_WIDGET_HTML} data={data ?? []} />;
+/** An agent-made widget (the built-in example: open pull requests per repository), fed by the core's data job. */
+export function AgentWidget({ widget }: { widget: WidgetInstance }) {
+  const { data } = useWidgetData<unknown>(widget);
+  return <AgentFrame id={widget.id} version={1} title={widget.title ?? "Agent-made widget"} html={widget.html ?? AGENT_WIDGET_HTML} data={data ?? []} />;
 }
 
 /** The mock flow behind "Ask <Agent> to make a widget": a WidgetAuthor run, a preview, then Add. */
@@ -226,7 +222,7 @@ export function AskAgentFlow({ onClose, onAdd }: { onClose: () => void; onAdd: (
         <div className="preview">
           <p className="muted">Preview with one dry-run refresh. It renders in a sandbox with no network or app access.</p>
           <div className="preview__frame">
-            <AgentWidget id="preview" title={result.title} html={result.html} />
+            <AgentWidget widget={{ id: "preview", type: "agent", title: result.title, html: result.html }} />
           </div>
         </div>
       ) : (

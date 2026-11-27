@@ -22,7 +22,7 @@ export function useAgents() {
 
   const setPaused = useCallback(
     (agent: Agent, paused: boolean) => {
-      core.setPaused(agent.id, paused);
+      void core.setPaused(agent.id, paused);
       toast(paused ? `${agent.name} is paused. It won't wake until you resume it.` : `${agent.name} resumed.`, "info");
     },
     [core, toast],

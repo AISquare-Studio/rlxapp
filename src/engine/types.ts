@@ -113,6 +113,18 @@ export interface RunSummary {
   account?: AccountChoice;
 }
 
+/**
+ * One run as `run.get` returns it (hub decision A.1): its summary plus how it ended, durably,
+ * so an outcome survives an rlxd restart and a closed app can deliver it later.
+ */
+export interface RunResult extends RunSummary {
+  /** The final status, once it has finished. */
+  status?: RunStatus;
+  /** Its structured output, once done. */
+  output?: unknown;
+  finishedAt?: number;
+}
+
 /** `run.list`'s filters (hub decision A.1): one job's runs, newest first, at most `limit`. */
 export interface RunFilter {
   jobId?: string;
@@ -163,6 +175,8 @@ export interface Engine {
   run(req: RunRequest): Promise<RunId>;
   /** Everything the engine knows, live or ended, newest first; or one job's runs. */
   runs(filter?: RunFilter): Promise<RunSummary[]>;
+  /** One run and how it ended (`run.get`); null if the engine doesn't know it. */
+  getRun(run: RunId): Promise<RunResult | null>;
   /** Replays a run's events from `fromSeq`, then follows live. */
   attach(run: RunId, fromSeq: number, onEvent: (event: Seq<RunEvent>) => void): Unsubscribe;
   /** Only for runs the engine reports dead or waiting on the owner. */

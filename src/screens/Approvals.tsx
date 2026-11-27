@@ -89,7 +89,7 @@ function Drafts() {
                   type="button"
                   className="button button--primary"
                   onClick={() => {
-                    core.editDraft(draft.id, text);
+                    void core.editDraft(draft.id, text);
                     setEditing(null);
                   }}
                 >
@@ -105,7 +105,7 @@ function Drafts() {
                   type="button"
                   className="button button--primary"
                   onClick={() => {
-                    core.approveAndSend(draft.id);
+                    void core.approveAndSend(draft.id);
                     toast(`Sent to ${draft.destination}`, "success");
                   }}
                 >
@@ -124,7 +124,7 @@ function Drafts() {
                     {
                       label: "Discard",
                       onSelect: () => {
-                        core.discardDraft(draft.id);
+                        void core.discardDraft(draft.id);
                         toast("Draft discarded", "info");
                       },
                     },
@@ -195,7 +195,7 @@ function Standing() {
                 type="button"
                 className="button button--danger"
                 onClick={() => {
-                  core.revokeApproval(revoking.id);
+                  void core.revokeApproval(revoking.id);
                   setRevoking(null);
                   toast("Approval revoked", "info");
                 }}

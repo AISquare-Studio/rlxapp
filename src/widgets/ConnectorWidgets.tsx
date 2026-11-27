@@ -1,9 +1,10 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import { GMAIL, SLACK } from "../core/connectors.ts";
 import type { NewDraft } from "../core/types.ts";
 import type { Feed, FeedItem, GmailDashboard } from "../engine/fake/data.ts";
-import { useEngineData, useNow } from "../engine/hooks.ts";
+import { useNow, useWidgetData } from "../engine/hooks.ts";
 import { useApp } from "../state/context.ts";
+import type { WidgetInstance } from "../state/model.ts";
 import { Icon } from "../ui/Icon.tsx";
 import { MoreMenu } from "../ui/MoreMenu.tsx";
 import type { GenericManifest } from "./manifest.ts";
@@ -18,7 +19,7 @@ function ago(now: number, then: number | null): string {
 function useCreateDraft() {
   const { core, toast, state } = useApp();
   return (draft: NewDraft) => {
-    core.createDraft(draft);
+    void core.createDraft(draft);
     toast(`Draft saved for your approval. ${state.settings.agentName} won't send it until you approve.`, "success");
   };
 }
@@ -48,24 +49,17 @@ function FeedRow({ item, action }: { item: FeedItem; action?: ReactNode }) {
   );
 }
 
-export function SlackDigestWidget({ settingsOpen }: { settingsOpen: boolean }) {
-  const { state, updateSettings, core, demo } = useApp();
+/**
+ * The Slack digest. Its data job is the Slack agent's silent run: the core records each fetch as
+ * that agent's latest outcome.
+ */
+export function SlackDigestWidget({ widget, settingsOpen }: { widget: WidgetInstance; settingsOpen: boolean }) {
+  const { state, updateSettings, demo } = useApp();
   const interval = state.settings.slackIntervalMin;
-  const { data, status, fetchedAt, refresh } = useEngineData<Feed>(
-    "widget_refresh",
-    `Slack: what needs ${state.settings.ownerName}, across DMs, mentions, threads and channels`,
-    { kind: "connectors", connectors: [SLACK] },
-    interval,
-  );
+  const { data, status, fetchedAt, refresh } = useWidgetData<Feed>(widget);
   const now = useNow(30_000);
   const createDraft = useCreateDraft();
   const reviewed = data?.reviewed;
-  // This widget is the Slack agent's silent run: each fetch is its latest outcome.
-  useEffect(() => {
-    if (fetchedAt === null || reviewed === undefined) return;
-    const outcome = reviewed > 0 ? `Claude reviewed ${reviewed} new` : "Fetched, nothing new, no Claude usage";
-    core.recordAgentRun("slack-agent", { at: fetchedAt, outcome, modelTurn: reviewed > 0 });
-  }, [fetchedAt, reviewed, core]);
   return (
     <div className="feed">
       <div className="widget__meta-row">
@@ -176,14 +170,9 @@ function GmailSection({ title, count, line, open, children }: { title: string; c
   );
 }
 
-export function GmailWidget({ settingsOpen }: { settingsOpen: boolean }) {
+export function GmailWidget({ widget, settingsOpen }: { widget: WidgetInstance; settingsOpen: boolean }) {
   const { state, updateSettings } = useApp();
-  const { data } = useEngineData<GmailDashboard>(
-    "widget_refresh",
-    "Gmail: needs a reply, important unread, key senders, a daily digest and today's meetings",
-    { kind: "connectors", connectors: [GMAIL] },
-    15,
-  );
+  const { data } = useWidgetData<GmailDashboard>(widget);
   const createDraft = useCreateDraft();
   const [newSender, setNewSender] = useState("");
   if (!data) return <p className="muted">Checking Gmail…</p>;
@@ -316,13 +305,8 @@ export function GmailWidget({ settingsOpen }: { settingsOpen: boolean }) {
   );
 }
 
-export function GenericConnectorWidget({ manifest }: { manifest: GenericManifest }) {
-  const { data } = useEngineData<Feed>(
-    "widget_refresh",
-    manifest.data.prompt,
-    { kind: "connectors", connectors: [manifest.data.connector] },
-    manifest.data.every.minutes,
-  );
+export function GenericConnectorWidget({ widget, manifest }: { widget: WidgetInstance; manifest: GenericManifest }) {
+  const { data } = useWidgetData<Feed>(widget);
   if (!data) return <p className="muted">Checking {manifest.title}…</p>;
   return (
     <div className="feed" data-testid="generic-widget">

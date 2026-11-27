@@ -4,6 +4,7 @@ import { FakeEngine, parseInstruction } from "../engine/fake/FakeEngine.ts";
 import { USER_CONNECTORS, seedAgents } from "../state/agents.ts";
 import { CONNECTOR_NAMES, DEFAULT_SETTINGS } from "../state/model.ts";
 import { GMAIL, GOOGLE_CALENDAR, GOOGLE_DRIVE, LINEAR, SLACK, connectorId, connectorLabel, isConnectorId } from "./connectors.ts";
+import { DeviceStore } from "./device.ts";
 import { FakeCore } from "./fake/FakeCore.ts";
 import { sendCheck } from "./gate.ts";
 
@@ -12,7 +13,7 @@ const code = Object.entries(sources).filter(([path]) => !/\.test\.tsx?$/.test(pa
 
 describe("connector ids: one spelling everywhere", () => {
   it("stores the claude.ai server name in agents, proposals, the briefing, send modes, widgets, the engine and the core's data", () => {
-    const core = new FakeCore({ engine: new FakeEngine({ seed: false }), storage: null });
+    const core = new FakeCore({ engine: new FakeEngine({ seed: false }), device: new DeviceStore(null) });
     const snap = core.snapshot();
     core.dispose();
     const stored: [string, string][] = [

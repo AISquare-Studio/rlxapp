@@ -1,7 +1,7 @@
-import { useCallback, useEffect, useRef, useState } from "react";
-import { newRunId } from "../core/ids.ts";
+import { useCallback, useEffect, useState } from "react";
 import { useApp } from "../state/context.ts";
-import type { HostSettings, Mount, RunEvent, RunKind, RunSummary, Seq } from "./types.ts";
+import type { WidgetInstance } from "../state/model.ts";
+import type { HostSettings, RunEvent, RunSummary, Seq } from "./types.ts";
 
 export { newRunId } from "../core/ids.ts";
 
@@ -55,7 +55,7 @@ export function useNow(ms = 1000): number {
   return value;
 }
 
-export interface EngineData<T> {
+export interface WidgetDataView<T> {
   data: T | null;
   status: "refreshing" | "ok" | "error";
   fetchedAt: number | null;
@@ -63,68 +63,17 @@ export interface EngineData<T> {
 }
 
 /**
- * A widget's data job: one engine run whose finished output is the data (architecture §5.1).
- * Invalid or failed output keeps the last good data and reports `error`.
+ * A widget's data, from the core's data job for it (architecture §5.1): watching starts the job
+ * (a refresh now, then on its interval) and leaving stops it. A failed refresh keeps the last
+ * good data and reports `error`.
  */
-export function useEngineData<T>(kind: RunKind, prompt: string, mount: Mount, everyMin?: number): EngineData<T> {
-  const { engine, now } = useApp();
-  const [data, setData] = useState<T | null>(null);
-  const [status, setStatus] = useState<EngineData<T>["status"]>("refreshing");
-  const [fetchedAt, setFetchedAt] = useState<number | null>(null);
-  const stop = useRef<() => void>(() => {});
-  const mountKey = JSON.stringify(mount);
-
-  /** Starts one refresh run and follows it to its finished event. */
-  const start = useCallback(() => {
-    stop.current();
-    let active = true;
-    let finished = false;
-    let off: () => void = () => {};
-    const id = newRunId();
-    stop.current = () => {
-      active = false;
-      off();
-      // A refresh nobody waits for any more is cancelled, not left to spend a turn.
-      if (!finished) void engine.cancel(id).catch(() => {});
-    };
-    const parsedMount = JSON.parse(mountKey) as Mount;
-    const needs = parsedMount.kind === "connectors" ? parsedMount.connectors : [];
-    engine
-      .run({ id, kind, prompt, mount: parsedMount, needsConnectors: needs, persist: false })
-      .then(() => {
-        if (!active) {
-          if (!finished) void engine.cancel(id).catch(() => {});
-          return;
-        }
-        off = engine.attach(id, 1, ({ event }) => {
-          if (event.type === "finished") finished = true;
-          if (!active || event.type !== "finished") return;
-          if (event.status === "done" && event.output !== undefined && event.output !== null) {
-            setData(event.output as T);
-            setFetchedAt(now());
-            setStatus("ok");
-          } else {
-            setStatus("error");
-          }
-        });
-      })
-      .catch(() => active && setStatus("error"));
-  }, [engine, kind, prompt, mountKey, now]);
-
-  useEffect(() => {
-    start();
-    const timer = everyMin ? setInterval(start, everyMin * 60_000) : undefined;
-    return () => {
-      stop.current();
-      if (timer) clearInterval(timer);
-    };
-  }, [start, everyMin]);
-
-  const refresh = useCallback(() => {
-    setStatus("refreshing");
-    start();
-  }, [start]);
-  return { data, status, fetchedAt, refresh };
+export function useWidgetData<T>(widget: WidgetInstance): WidgetDataView<T> {
+  const { core, state } = useApp();
+  const key = JSON.stringify(widget);
+  useEffect(() => core.watchWidget(JSON.parse(key) as WidgetInstance), [core, key]);
+  const entry = state.widgetData[widget.id];
+  const refresh = useCallback(() => void core.refreshWidget(widget.id), [core, widget.id]);
+  return { data: (entry?.data as T | null | undefined) ?? null, status: entry?.status ?? "refreshing", fetchedAt: entry?.fetchedAt ?? null, refresh };
 }
 
 /**

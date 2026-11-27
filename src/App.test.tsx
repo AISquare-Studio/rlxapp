@@ -236,6 +236,32 @@ describe("2-way split (owner amendment 4)", () => {
   });
 });
 
+describe("relaunch (core seam)", () => {
+  it("keeps the host's names, theme and agents, and this device's onboarding, across a relaunch", async () => {
+    const first = fakeServices({ settings: { ...DEFAULT_SETTINGS }, stepMs: 50 });
+    const view = render(<App platform={browserPlatform} {...first} />);
+    fireEvent.click(await screen.findByRole("button", { name: "Get started" }));
+    await screen.findByText("Signed in");
+    fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+    fireEvent.change(screen.getByLabelText("Agent name"), { target: { value: "Atlas" } });
+    fireEvent.change(screen.getByLabelText("Your name"), { target: { value: "Ada Park" } });
+    fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+    fireEvent.click(screen.getByRole("button", { name: "Go to Home" }));
+    fireEvent.click(within(await screen.findByRole("navigation", { name: "Navigation" })).getByRole("button", { name: "Settings" }));
+    fireEvent.click(screen.getByLabelText("Light"));
+    view.unmount();
+    first.core.dispose();
+
+    const again = fakeServices({ host: first.host, device: first.device, stepMs: 50 });
+    render(<App platform={browserPlatform} {...again} />);
+    expect(await screen.findByRole("heading", { level: 1, name: "Home" })).toBeTruthy();
+    expect(document.documentElement.dataset.theme).toBe("rlx-light");
+    expect(screen.getByText("Ada's space")).toBeTruthy();
+    fireEvent.click(within(screen.getByRole("navigation", { name: "Navigation" })).getByRole("button", { name: /^Approvals/ }));
+    expect(within(await screen.findByTestId("drafts")).getAllByTestId("sign-off")[0]?.textContent).toBe("— Atlas, Ada Park's AI Agent");
+  });
+});
+
 describe("this device's storage (core seam)", () => {
   it("keeps no product state on the device: only its device-local settings", async () => {
     await renderApp({ ...DEFAULT_SETTINGS });

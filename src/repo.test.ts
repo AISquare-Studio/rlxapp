@@ -68,9 +68,17 @@ describe("the core seam", () => {
     expect(offenders).toEqual([]);
   });
 
-  it("writes to this device's storage only through the device store", () => {
-    const writers = files.filter(([, text]) => /\.(setItem|removeItem)\(/.test(text)).map(([path]) => path);
+  it("writes to this device's storage only through the device store (fakes aside: the preview's fake host)", () => {
+    const writers = files.filter(([path, text]) => !path.includes("/fake/") && /\.(setItem|removeItem)\(/.test(text)).map(([path]) => path);
     expect(writers).toEqual(["/src/core/device.ts"]);
+  });
+
+  it("runs widget data jobs only in the core, never from React", () => {
+    const react = files.filter(([path]) => path.endsWith(".tsx") || path === "/src/engine/hooks.ts");
+    const offenders = react.filter(([, text]) => /widget_refresh|useEngineData/.test(text)).map(([path]) => path);
+    expect(offenders).toEqual([]);
+    // React keeps no widget data of its own: it reads the core's snapshot.
+    expect(react.filter(([, text]) => /engine\.run\(/.test(text)).map(([path]) => path).sort()).toEqual(["/src/screens/Runs.tsx", "/src/widgets/AgentWidget.tsx"]);
   });
 });
 

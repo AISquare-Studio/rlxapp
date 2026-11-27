@@ -281,13 +281,13 @@ function Notices() {
               type="button"
               className="button button--sm button--primary"
               onClick={() => {
-                core.dismissNotice(n.id);
+                void core.dismissNotice(n.id);
                 navigate({ name: "channel", id: n.channel });
               }}
             >
               Open
             </button>
-            <button type="button" className="button button--sm" onClick={() => core.dismissNotice(n.id)}>
+            <button type="button" className="button button--sm" onClick={() => void core.dismissNotice(n.id)}>
               Dismiss
             </button>
           </div>

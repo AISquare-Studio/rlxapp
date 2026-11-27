@@ -16,6 +16,7 @@ import type {
   RunEvent,
   RunFilter,
   RunId,
+  RunResult,
   RunRequest,
   RunState,
   RunSummary,
@@ -55,6 +56,7 @@ interface RunRecord {
   pending: string[];
   /** Milliseconds between this run's steps, if not the engine's. */
   stepMs?: number;
+  finishedAt?: number;
   /**
    * Finishes on its own timer (agent runs, chat turns, widget refreshes…). The task scheduler
    * must never pick it up: it would finish it with a scripted task's output instead.
@@ -180,21 +182,33 @@ export class FakeEngine implements Engine, DeveloperEngine, DemoControls {
   runs(filter: RunFilter = {}): Promise<RunSummary[]> {
     const all = [...this.records.entries()]
       .filter(([, r]) => filter.jobId === undefined || r.req.jobId === filter.jobId)
-      .map(([id, r]) => ({
-        id,
-        kind: r.req.kind,
-        state: r.state,
-        title: r.title,
-        startedAt: r.startedAt,
-        lastSeq: r.events.length,
-        failureReason: r.failureReason,
-        jobId: r.req.jobId,
-        agentId: r.req.agentId,
-        loud: r.req.loud,
-        account: r.req.account,
-      }))
+      .map(([id, r]) => this.summary(id, r))
       .sort((a, b) => b.startedAt - a.startedAt);
     return Promise.resolve(filter.limit === undefined ? all : all.slice(0, filter.limit));
+  }
+
+  getRun(run: RunId): Promise<RunResult | null> {
+    const record = this.records.get(run);
+    if (!record) return Promise.resolve(null);
+    const finished = [...record.events].reverse().find((e) => e.event.type === "finished")?.event;
+    const ended = finished?.type === "finished" ? { status: finished.status, output: finished.output, finishedAt: record.finishedAt } : {};
+    return Promise.resolve({ ...this.summary(run, record), ...ended });
+  }
+
+  private summary(id: RunId, r: RunRecord): RunSummary {
+    return {
+      id,
+      kind: r.req.kind,
+      state: r.state,
+      title: r.title,
+      startedAt: r.startedAt,
+      lastSeq: r.events.length,
+      failureReason: r.failureReason,
+      jobId: r.req.jobId,
+      agentId: r.req.agentId,
+      loud: r.req.loud,
+      account: r.req.account,
+    };
   }
 
   attach(run: RunId, fromSeq: number, onEvent: (event: Seq<RunEvent>) => void): Unsubscribe {
@@ -302,6 +316,7 @@ export class FakeEngine implements Engine, DeveloperEngine, DemoControls {
   }
 
   private emit(record: RunRecord, event: RunEvent): void {
+    if (event.type === "finished") record.finishedAt = this.now();
     const seq: Seq<RunEvent> = { seq: record.events.length + 1, event };
     record.events.push(seq);
     for (const listener of record.listeners) listener(seq);

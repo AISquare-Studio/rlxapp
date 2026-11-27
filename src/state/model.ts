@@ -43,6 +43,8 @@ export interface WidgetInstance {
   connector?: ConnectorId;
   /** Which Claude account its refreshes use; Auto when absent (task #23). */
   account?: AccountChoice;
+  /** The agent whose silent run this widget shows; its refreshes record that agent's last run. */
+  agentId?: string;
 }
 
 /**
@@ -203,8 +205,8 @@ export type AppState = CoreSnapshot & UiState;
 export const CONNECTOR_NAMES: readonly ConnectorId[] = [SLACK, GMAIL, LINEAR];
 
 export const DEFAULT_WIDGETS: WidgetInstance[] = [
-  { id: "w-slack", type: "slack" },
-  { id: "w-gmail", type: "gmail" },
+  { id: "w-slack", type: "slack", agentId: "slack-agent" },
+  { id: "w-gmail", type: "gmail", agentId: "gmail-agent" },
   { id: "w-clock", type: "clock" },
   { id: "w-pomodoro", type: "pomodoro" },
   { id: "w-timer", type: "timer" },

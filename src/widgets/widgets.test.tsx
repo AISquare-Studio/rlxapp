@@ -5,7 +5,7 @@ import { App } from "../App.tsx";
 import { browserPlatform, type Platform, type WidgetSource } from "../platform/index.ts";
 import { WidgetHost } from "../platform/widgetHost.ts";
 import { AppProvider } from "../state/AppProvider.tsx";
-import { DEFAULT_SETTINGS } from "../state/model.ts";
+import { DEFAULT_SETTINGS, DEFAULT_WIDGETS, type WidgetInstance } from "../state/model.ts";
 import { fakeServices } from "../test/fakeServices.ts";
 import { AgentFrame, AGENT_WIDGET_SANDBOX } from "./AgentWidget.tsx";
 import { withColorScheme } from "./colorScheme.ts";
@@ -13,6 +13,8 @@ import { GmailWidget, SlackDigestWidget } from "./ConnectorWidgets.tsx";
 import { ClockWidget, PomodoroWidget, TimerWidget } from "./TimeWidgets.tsx";
 
 const settings = { ...DEFAULT_SETTINGS, onboarded: true };
+const slackWidget = DEFAULT_WIDGETS.find((w) => w.type === "slack") as WidgetInstance;
+const gmailWidget = DEFAULT_WIDGETS.find((w) => w.type === "gmail") as WidgetInstance;
 
 function wrap(children: ReactNode, services = fakeServices({ settings, stepMs: 20, seed: false })) {
   return render(
@@ -75,7 +77,7 @@ describe("time widgets", () => {
 
 describe("Slack digest", () => {
   it("shows when it last checked and its interval, defaulting to 15 minutes, and a reason on every needs-you item", async () => {
-    wrap(<SlackDigestWidget settingsOpen={false} />);
+    wrap(<SlackDigestWidget widget={slackWidget} settingsOpen={false} />);
     const meta = await screen.findByTestId("slack-meta");
     await screen.findByText(/Priya Shah/);
     // One quiet line: what the refresh cost; when, and how often, on hover or focus.
@@ -90,7 +92,7 @@ describe("Slack digest", () => {
   });
 
   it("shows each item as one line, with its channel, reason and Draft reply behind hover or focus", async () => {
-    wrap(<SlackDigestWidget settingsOpen={false} />);
+    wrap(<SlackDigestWidget widget={slackWidget} settingsOpen={false} />);
     await screen.findByText(/Priya Shah/);
     const items = [...document.querySelectorAll<HTMLElement>(".feed__item")];
     expect(items.length).toBe(5);
@@ -111,7 +113,7 @@ describe("Slack digest", () => {
   });
 
   it("lets the interval be changed", async () => {
-    wrap(<SlackDigestWidget settingsOpen />);
+    wrap(<SlackDigestWidget widget={slackWidget} settingsOpen />);
     fireEvent.change(await screen.findByLabelText("Slack digest interval"), { target: { value: "30" } });
     expect(await screen.findByText(/every 30 min/)).toBeTruthy();
   });
@@ -119,7 +121,7 @@ describe("Slack digest", () => {
 
 describe("Gmail dashboard", () => {
   it("shows all five sections, each as one calm line: its header, a count and a summary", async () => {
-    wrap(<GmailWidget settingsOpen={false} />);
+    wrap(<GmailWidget widget={gmailWidget} settingsOpen={false} />);
     for (const [section, count] of [
       ["Needs a reply", "2"],
       ["Important unread", "2"],
@@ -139,7 +141,7 @@ describe("Gmail dashboard", () => {
   it("refreshes silently with no model turn, and takes one only when something is new", async () => {
     const services = fakeServices({ settings, stepMs: 20, seed: false });
     const { engine } = services;
-    wrap(<SlackDigestWidget settingsOpen={false} />, services);
+    wrap(<SlackDigestWidget widget={slackWidget} settingsOpen={false} />, services);
     const turn = () => screen.getByTestId("slack-turn").textContent;
     const refreshNow = () => {
       fireEvent.click(screen.getByRole("button", { name: "More actions for Slack digest" }));

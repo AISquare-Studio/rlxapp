@@ -64,7 +64,7 @@ export function AgentActions({ agent, compact, extra = [] }: { agent: Agent; com
           agent={agent}
           onClose={() => setEditing(false)}
           onSave={(next) => {
-            core.editAgent(agent.id, next);
+            void core.editAgent(agent.id, next);
             setEditing(false);
             toast(`Saved ${next.name}`, "success");
           }}

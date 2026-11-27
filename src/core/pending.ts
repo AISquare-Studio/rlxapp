@@ -18,6 +18,13 @@ export type PendingKind =
 
 export type PendingStatus = "open" | "answered" | "assumed" | "dismissed";
 
+/** An answer: one of the item's suggested answers, or free text (always available). */
+export type PendingAnswer = { kind: "choice"; label: string } | { kind: "text"; text: string };
+
+/** An approval item's two decisions. Only these choices act on the draft; free text never does. */
+export const APPROVE_CHOICE = "Approve and send";
+export const DISCARD_CHOICE = "Discard";
+
 export interface SuggestedAnswer {
   label: string;
   description?: string;
@@ -44,6 +51,12 @@ export interface PendingItem {
   answer?: string;
   answeredBy?: "person" | "manager-assumed";
   answeredAt?: number;
+  /** The owner kept the manager's assumed answer. */
+  confirmed?: boolean;
+  /** The owner changed an assumed answer: the manager redoes the work that depended on it. */
+  changed?: boolean;
+  /** Free text the owner wrote on an approval: kept, and it never sends. */
+  note?: string;
   /** Where an answer goes: the run that asked. */
   runId?: string;
   /** The draft an approval item is about. */

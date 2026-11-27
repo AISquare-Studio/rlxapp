@@ -130,7 +130,7 @@ export function Home() {
       return;
     }
     widgetCounter += 1;
-    core.addWidget({ id: `w-${type}-${Date.now().toString(36)}-${widgetCounter}`, type, connector });
+    void core.addWidget({ id: `w-${type}-${Date.now().toString(36)}-${widgetCounter}`, type, connector });
     setPicker(false);
     toast("Widget added", "success");
   };
@@ -162,7 +162,7 @@ export function Home() {
           const title = titleOf(widget, agentName);
           const settingsOpen = settingsFor === widget.id;
           const hasSettings = widget.type === "slack" || widget.type === "gmail";
-          const move = (to: number) => core.moveWidget(widget.id, to);
+          const move = (to: number) => void core.moveWidget(widget.id, to);
           return (
             <WidgetCard
               key={widget.id}
@@ -172,8 +172,8 @@ export function Home() {
               count={widgets.length}
               tall={widget.type === "slack"}
               onMove={move}
-              onRemove={() => core.removeWidget(widget.id)}
-              onDropWidget={(dragged) => core.moveWidget(dragged, index)}
+              onRemove={() => void core.removeWidget(widget.id)}
+              onDropWidget={(dragged) => void core.moveWidget(dragged, index)}
               actions={
                 hasSettings ? (
                   <button
@@ -188,13 +188,13 @@ export function Home() {
                 ) : null
               }
             >
-              {widget.type === "slack" ? <SlackDigestWidget settingsOpen={settingsOpen} /> : null}
-              {widget.type === "gmail" ? <GmailWidget settingsOpen={settingsOpen} /> : null}
+              {widget.type === "slack" ? <SlackDigestWidget widget={widget} settingsOpen={settingsOpen} /> : null}
+              {widget.type === "gmail" ? <GmailWidget widget={widget} settingsOpen={settingsOpen} /> : null}
               {widget.type === "clock" ? <ClockWidget /> : null}
               {widget.type === "timer" ? <TimerWidget /> : null}
               {widget.type === "pomodoro" ? <PomodoroWidget /> : null}
-              {widget.type === "generic" ? <GenericConnectorWidget manifest={genericManifest(widget.connector ?? LINEAR)} /> : null}
-              {widget.type === "agent" ? <AgentWidget id={widget.id} title={title} html={widget.html} /> : null}
+              {widget.type === "generic" ? <GenericConnectorWidget widget={widget} manifest={genericManifest(widget.connector ?? LINEAR)} /> : null}
+              {widget.type === "agent" ? <AgentWidget widget={{ ...widget, title }} /> : null}
               {widget.type === "ask" ? (
                 <div className="ask-card">
                   <p>Describe a widget and {agentName} builds it, previews it, and adds it when you say so.</p>
@@ -228,7 +228,7 @@ export function Home() {
           onClose={() => setAsking(false)}
           onAdd={(title, html) => {
             widgetCounter += 1;
-            core.addWidget({ id: `w-agent-${Date.now().toString(36)}-${widgetCounter}`, type: "agent", title, html });
+            void core.addWidget({ id: `w-agent-${Date.now().toString(36)}-${widgetCounter}`, type: "agent", title, html });
             setAsking(false);
             toast(`${agentName} added “${title}”`, "success");
           }}

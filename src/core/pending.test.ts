@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { FakeEngine } from "../engine/fake/FakeEngine.ts";
+import { DeviceStore } from "./device.ts";
 import { FakeCore } from "./fake/FakeCore.ts";
 import { DEFAULT_PENDING_MARKER, canAssume, newestSeq, pendingUnread, type PendingItem } from "./pending.ts";
 
@@ -41,7 +42,7 @@ describe("Pending rules", () => {
 
   it("lets the core's manager assume due items, while owner-only ones stay open", () => {
     let clock = 0;
-    const core = new FakeCore({ engine: new FakeEngine({ seed: false }), storage: null, now: () => clock });
+    const core = new FakeCore({ engine: new FakeEngine({ seed: false }), device: new DeviceStore(null), now: () => clock });
     clock = 60 * 60_000;
     core.assumeDue();
     // Every seeded item is an owner-only approval (sending for the owner): none is assumed.

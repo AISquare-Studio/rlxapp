@@ -121,7 +121,7 @@ function EmailDraftCard({ draftId }: { draftId: string }) {
 
   const send = () => {
     // The core's gate decides: sent now, or held for Auto's 10 seconds.
-    if (core.send(draft.id) === "sent") toast(`Sent to ${draft.destination}`, "success");
+    void core.send(draft.id).then((result) => result === "sent" && toast(`Sent to ${draft.destination}`, "success"));
   };
 
   return (
@@ -152,7 +152,7 @@ function EmailDraftCard({ draftId }: { draftId: string }) {
               type="button"
               className="button button--primary"
               onClick={() => {
-                core.editDraft(draft.id, text);
+                void core.editDraft(draft.id, text);
                 setEditing(false);
               }}
             >
@@ -166,7 +166,7 @@ function EmailDraftCard({ draftId }: { draftId: string }) {
           <button
             type="button"
             className="button"
-            onClick={() => core.undoSend(draft.id)}
+            onClick={() => void core.undoSend(draft.id)}
           >
             Undo
           </button>
@@ -179,7 +179,7 @@ function EmailDraftCard({ draftId }: { draftId: string }) {
                 <Icon name="send" size={16} /> Send
               </button>
             ) : (
-              <button type="button" className="button button--primary" onClick={() => core.approveDraft(draft.id)}>
+              <button type="button" className="button button--primary" onClick={() => void core.approveDraft(draft.id)}>
                 Approve
               </button>
             )}
@@ -193,7 +193,7 @@ function EmailDraftCard({ draftId }: { draftId: string }) {
                     setEditing(true);
                   },
                 },
-                { label: "Discard", onSelect: () => core.discardDraft(draft.id) },
+                { label: "Discard", onSelect: () => void core.discardDraft(draft.id) },
               ]}
             />
             <span className="muted card-msg__hint reveal">{hint}</span>
@@ -297,7 +297,7 @@ function ProposalCard({ message, card }: { message: Message; card: Extract<Card,
     );
   }
   // The core creates and schedules the agent, and confirms in the channel.
-  const confirm = () => core.confirmProposal(message.id, value);
+  const confirm = () => void core.confirmProposal(message.id, value);
   return (
     <div className="card-msg proposal" data-testid="proposal-card">
       <div className="card-msg__head">
@@ -309,7 +309,7 @@ function ProposalCard({ message, card }: { message: Message; card: Extract<Card,
         <button type="button" className="button button--primary" disabled={!value.name.trim() || value.connectors.length === 0} onClick={confirm}>
           Confirm
         </button>
-        <button type="button" className="button" onClick={() => core.cancelProposal(message.id)}>
+        <button type="button" className="button" onClick={() => void core.cancelProposal(message.id)}>
           Cancel
         </button>
       </div>

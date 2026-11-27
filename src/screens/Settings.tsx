@@ -28,7 +28,7 @@ const THEME_MODES: { id: ThemeMode; label: string }[] = [
 ];
 
 export function Settings({ osDark }: { osDark: boolean }) {
-  const { state, updateSettings, dispatch, navigate } = useApp();
+  const { state, updateSettings, dispatch, navigate, core } = useApp();
   const s = state.settings;
   const [autoFor, setAutoFor] = useState<string | null>(null);
   const [typed, setTyped] = useState("");
@@ -41,7 +41,7 @@ export function Settings({ osDark }: { osDark: boolean }) {
       setTyped("");
       return;
     }
-    updateSettings({ sendModes: { ...s.sendModes, [connector]: mode } });
+    void core.setSendMode(connector, mode);
   };
 
   return (
@@ -242,7 +242,8 @@ export function Settings({ osDark }: { osDark: boolean }) {
                 className="button button--warning"
                 disabled={typed.trim().toUpperCase() !== "AUTO"}
                 onClick={() => {
-                  updateSettings({ sendModes: { ...s.sendModes, [autoFor]: "auto" } });
+                  // The core has the last word on Auto (its own dialog, once it has one).
+                  void core.setSendMode(autoFor, "auto");
                   setAutoFor(null);
                 }}
               >
