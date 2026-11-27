@@ -496,6 +496,38 @@ function readReachHit(hit) {
   return match ? { at: Number(match[1]), address: match[2], what: match[3] } : { at: NaN, address: "?", what: String(hit) };
 }
 
+/**
+ * Each direct hit at a side's reach listener, given to the on-host attempt that could have
+ * sent it: an http preconnect sends nothing (a plain connection), an https one a ClientHello
+ * whose SNI fits its host (none for an IP literal, `sni=<name>` for a name), and an IP
+ * literal is reached only at that address. A hit goes to the most recent such attempt up to
+ * 2 s before it, since a ClientHello can come a few hundred ms late (a slow name lookup).
+ * Returns a map from attempt to its hits.
+ */
+function directHits(tried, reachHits) {
+  const byAttempt = new Map();
+  for (const [side] of SIDES) {
+    const onHost = tried[side].filter((a) => a.class === "on-host" && a.rel === "preconnect");
+    for (const hit of reachHits[side]) {
+      const fits = onHost.filter((a) => a.at <= hit.at + 20 && hit.at - a.at < 2000 && hitFits(a, hit));
+      const attempt = fits.reduce((latest, a) => (latest === null || a.at > latest.at ? a : latest), null);
+      if (attempt) byAttempt.set(attempt, [...(byAttempt.get(attempt) ?? []), hit]);
+    }
+  }
+  return byAttempt;
+}
+
+function hitFits(attempt, hit) {
+  const host = String(attempt.host).replace(/^\[(.*)\]$/, "$1").toLowerCase();
+  const literal = /^[\d.]+$/.test(host) || host.includes(":");
+  if (literal && hit.address !== host) return false;
+  const tls = hit.what.startsWith("tls ClientHello");
+  if (attempt.scheme === "http") return !tls;
+  if (!tls) return false;
+  if (hit.what.includes("sni not in the first record")) return true;
+  return hit.what.endsWith(literal ? "no sni" : `sni=${host}`);
+}
+
 /** The DNS listener's queries, `"<ms> <type> <name>"` (src-tauri/src/e2e/dns.rs). */
 function readQueries(dns) {
   return (dns?.queries ?? []).map((line) => {
@@ -568,13 +600,13 @@ function reachChecks(report, checks, { check, gate, info }) {
   const evidence = new Map();
   const widgetAttempts = SIDES.flatMap(([side]) => tried[side].map((attempt) => ({ side, attempt }))).sort((a, b) => a.attempt.at - b.attempt.at);
   const unnamed = [];
-  widgetAttempts.forEach(({ side, attempt }, index) => {
+  const directByAttempt = directHits(tried, reachHits);
+  widgetAttempts.forEach(({ attempt }, index) => {
     const named = attempt.rel === "preconnect" && proxyLog.named.has(authorityKey(attempt.authority));
     const next = widgetAttempts[index + 1]?.attempt.at ?? attempt.at + 250;
-    const direct = attempt.class === "on-host" ? reachHits[side].filter((h) => h.at >= attempt.at - 20 && h.at < next - 20) : [];
     const looked = queries.filter((q) => q.name === String(attempt.host).toLowerCase());
     const syn = synSent.filter((s) => s.port === Number(attempt.port));
-    const found = { named, untagged: null, direct, looked, syn };
+    const found = { named, untagged: null, direct: directByAttempt.get(attempt) ?? [], looked, syn };
     evidence.set(attempt, found);
     // Only Chromium (Windows) sends nothing on an http preconnect through a proxy; WebKit
     // CONNECTs every one, so elsewhere an untagged connection credits nothing.

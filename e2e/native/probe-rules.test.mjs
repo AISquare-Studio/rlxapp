@@ -62,7 +62,8 @@ function reachParts(os, { dns = false, silent = false } = {}) {
       if (os === "macos" && MACOS_RESIDUAL.includes(attempt.id)) {
         if (attempt.class === "on-host") {
           const address = attempt.id === "loopback-v6" ? "::1" : attempt.id === "own-lan-address" ? LAN : "127.0.0.1";
-          hits[side].push(`${attempt.at + 3} tcp@${address} ${attempt.scheme === "http" ? "connection, no data" : "tls ClientHello, no sni"}`);
+          const sni = attempt.id === "localhost" ? "sni=localhost" : "no sni";
+          hits[side].push(`${attempt.at + 3} tcp@${address} ${attempt.scheme === "http" ? "connection, no data" : `tls ClientHello, ${sni}`}`);
         }
         continue;
       }
@@ -228,6 +229,25 @@ describe("isolation probe rules", () => {
     expect(row().ok).toBe(false);
     expect(row().detail).toBe("this OS has the proxy, but it isn't running");
     expect(passed(evaluate(report))).toBe(false);
+  });
+
+  it("gives a late direct hit to the attempt that could have sent it, not to the next one (macOS CI)", () => {
+    // CI, macOS 26.7: localhost's https ClientHellos came 200-242 ms late, the last one inside
+    // the slot of sub-localhost's http preconnect, which went to the proxy.
+    const report = passingReport();
+    const localhost = report.host.iframe.reach.find((a) => a.id === "localhost" && a.scheme === "https");
+    const sub = report.host.iframe.reach.find((a) => a.id === "sub-localhost" && a.scheme === "http");
+    report.listeners.reachIframe.hits.push(`${sub.at + 2} tcp@::1 tls ClientHello, sni=localhost`);
+    const checks = strictly(() => evaluate(report));
+    expect(failing(checks)).toEqual([]);
+    expect(checks.find((c) => c.id.startsWith("widget iframe → localhost")).detail).toBe(
+      "http: not in the proxy log; direct: tcp@127.0.0.1 connection, no data · https: not in the proxy log; direct: tcp@127.0.0.1 tls ClientHello, sni=localhost, tcp@::1 tls ClientHello, sni=localhost",
+    );
+    expect(localhost.at).toBeLessThan(sub.at);
+    // A hit that only sub-localhost could have sent still fails its gate.
+    const subHttps = report.host.iframe.reach.find((a) => a.id === "sub-localhost" && a.scheme === "https");
+    report.listeners.reachIframe.hits.push(`${subHttps.at + 5} tcp@127.0.0.1 tls ClientHello, sni=rlx-widget-iframe.localhost`);
+    expect(failing(strictly(() => evaluate(report)))).toEqual(["widget iframe → sub-localhost (rlx-widget-iframe.localhost) reaches only the deny-all proxy"]);
   });
 
   it("credits an untagged proxy connection to an http preconnect on Windows only", () => {
