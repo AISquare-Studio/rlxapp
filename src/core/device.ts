@@ -10,16 +10,16 @@ import type { Unsubscribe } from "../engine/types.ts";
 import { connectorId } from "./connectors.ts";
 import { pickHost, type HostStore } from "./host.ts";
 import { jobIdFor, type Agent } from "../state/agents.ts";
-import { DEVICE_SETTING_KEYS, type DeviceSettings } from "../state/model.ts";
+import { DEVICE_SETTING_KEYS, type AppSettings, type DeviceSettings, type WidgetInstance } from "../state/model.ts";
 
 export const DEVICE_STORAGE_KEY = "rlx.device.v1";
 
-/** Before the core seam, the app kept every setting here, agents included. Read once, never written. */
+/** Before the core seam, the app kept every setting here, agents included. Migrated once, then removed. */
 export const LEGACY_SETTINGS_KEY = "rlx.settings.v1";
 
 export const DEFAULT_DEVICE_SETTINGS: DeviceSettings = { onboarded: false, devMode: false, engineHome: "" };
 
-export type DeviceStorage = Pick<Storage, "getItem" | "setItem">;
+export type DeviceStorage = Pick<Storage, "getItem" | "setItem" | "removeItem">;
 
 /** This device's localStorage, or null where there is none (or reading it throws). */
 export function deviceStorage(): DeviceStorage | null {
@@ -69,15 +69,19 @@ export class DeviceStore {
     return this.stored;
   }
 
-  update(patch: Partial<DeviceSettings>): void {
+  /** Changes some settings; returns whether they reached this device's storage. */
+  update(patch: Partial<DeviceSettings>): boolean {
     this.settings = { ...this.settings, ...pickDevice(patch) };
+    let saved = false;
     try {
       this.storage?.setItem(DEVICE_STORAGE_KEY, JSON.stringify(this.settings));
-      this.stored = this.storage !== null;
+      saved = this.storage !== null;
+      this.stored ||= saved;
     } catch {
       // Storage can be unavailable (private mode); device settings then last for the session.
     }
     for (const listener of this.listeners) listener(this.settings);
+    return saved;
   }
 
   subscribe(listener: (settings: DeviceSettings) => void): Unsubscribe {
@@ -91,18 +95,36 @@ function migrateAgent(agent: Agent): Agent {
   return { ...agent, jobId: agent.jobId || jobIdFor(agent.id), connectors: (agent.connectors ?? []).map(connectorId) };
 }
 
+/** Pre-seam host settings, with every connector spelled as an id. */
+function migrateHostSettings(legacy: Record<string, unknown>): Partial<AppSettings> {
+  const settings = pickHost(legacy);
+  if (settings.sendModes) settings.sendModes = Object.fromEntries(Object.entries(settings.sendModes).map(([connector, mode]) => [connectorId(connector), mode]));
+  if (Array.isArray(settings.widgets)) {
+    settings.widgets = settings.widgets.map((w: WidgetInstance) => (w.connector ? { ...w, connector: connectorId(w.connector) } : w));
+  }
+  return settings;
+}
+
 /**
- * Moves the pre-seam settings into the device store and the host store, once: only on a device
- * that hasn't stored its own settings yet, and never over host data already there. The old key
- * is left as it was. Returns whether it migrated.
+ * Moves the pre-seam settings (rc's `rlx.settings.v1`) once: the device keys into this device's
+ * store, the host keys (names, theme, send modes, widgets, agents) into the host's store, with
+ * connectors spelled as ids. Only on a device that hasn't stored its own settings yet, and
+ * never over host data already there. The old key goes only once both writes have landed; if
+ * either fails, it stays, and the next launch tries again. Returns whether it migrated.
  */
 export function migrateLegacySettings(storage: DeviceStorage | null, device: DeviceStore, host: HostStore): boolean {
   const legacy = read(storage, LEGACY_SETTINGS_KEY);
-  if (!legacy || device.hasStored()) return false;
-  device.update(pickDevice(legacy));
+  if (!storage || !legacy || device.hasStored()) return false;
   if (!host.load()) {
     const agents = Array.isArray(legacy.agents) ? (legacy.agents as Agent[]).map(migrateAgent) : [];
-    host.save({ settings: pickHost(legacy), agents });
+    host.save({ settings: migrateHostSettings(legacy), agents });
+  }
+  const saved = device.update(pickDevice(legacy)) && read(storage, DEVICE_STORAGE_KEY) !== null && host.load() !== null;
+  if (!saved) return false;
+  try {
+    storage.removeItem(LEGACY_SETTINGS_KEY);
+  } catch {
+    return false;
   }
   return true;
 }

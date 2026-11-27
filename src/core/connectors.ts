@@ -19,6 +19,9 @@ const LABELS: Record<ConnectorId, string> = {
   [GOOGLE_DRIVE]: "Meet transcripts (Google Drive)",
 };
 
+/** The connectors rlx knows by name. */
+export const KNOWN_CONNECTORS: readonly ConnectorId[] = [SLACK, GMAIL, LINEAR, GOOGLE_CALENDAR, GOOGLE_DRIVE];
+
 export function isConnectorId(value: string): boolean {
   return value.startsWith(CLAUDE_AI_PREFIX) && value.length > CLAUDE_AI_PREFIX.length;
 }
@@ -28,9 +31,17 @@ export function connectorLabel(id: ConnectorId): string {
   return LABELS[id] ?? (isConnectorId(id) ? id.slice(CLAUDE_AI_PREFIX.length) : id);
 }
 
-/** The id for a connector however it's named: its id, its label ("Slack"), or a known label. */
+/**
+ * The id for a connector however it's written: its id, its name ("Slack") or its label ("Meet
+ * transcripts (Google Drive)"), in any case, with stray spaces. A connector rlx doesn't know
+ * keeps its name, under the claude.ai prefix.
+ */
 export function connectorId(name: string): ConnectorId {
-  if (isConnectorId(name)) return name;
-  const known = Object.entries(LABELS).find(([, label]) => label === name)?.[0];
-  return known ?? `${CLAUDE_AI_PREFIX}${name}`;
+  const trimmed = name.trim().replace(/\s+/g, " ");
+  const lower = trimmed.toLowerCase();
+  const bare = lower.startsWith(CLAUDE_AI_PREFIX.toLowerCase()) ? trimmed.slice(CLAUDE_AI_PREFIX.length) : trimmed;
+  const known = KNOWN_CONNECTORS.find((id) =>
+    [id, id.slice(CLAUDE_AI_PREFIX.length), connectorLabel(id)].some((spelling) => spelling.toLowerCase() === lower || spelling.toLowerCase() === bare.toLowerCase()),
+  );
+  return known ?? `${CLAUDE_AI_PREFIX}${bare}`;
 }

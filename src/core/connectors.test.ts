@@ -49,6 +49,15 @@ describe("connector ids: one spelling everywhere", () => {
     expect(connectorId("Slack")).toBe(SLACK);
   });
 
+  it("reads ids, names and labels in any case and with stray spaces, and keeps an unknown connector's name", () => {
+    for (const spelling of ["slack", " Slack", "SLACK ", "claude.ai slack", "Claude.ai Slack", "  claude.ai   Slack "]) expect(connectorId(spelling)).toBe(SLACK);
+    expect(connectorId("meet transcripts (google drive)")).toBe(GOOGLE_DRIVE);
+    expect(connectorId("google drive")).toBe(GOOGLE_DRIVE);
+    expect(connectorId(" google calendar ")).toBe(GOOGLE_CALENDAR);
+    expect(connectorId("Notion")).toBe("claude.ai Notion");
+    expect(connectorId(" claude.ai Notion ")).toBe("claude.ai Notion");
+  });
+
   it("lets an agent's draft find its connector's send mode (the 'Slack' vs 'claude.ai Slack' split is gone)", () => {
     const draft = { id: "d", status: "pending" as const, origin: "task" as const, connector: BRIEFING.draft.connector, destination: "Finance Team", body: "", createdAt: 0, context: "" };
     expect(sendCheck(draft, { sendModes: { [GMAIL]: "auto" } }, []).mode).toBe("auto");

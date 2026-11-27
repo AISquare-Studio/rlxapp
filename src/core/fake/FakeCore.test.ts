@@ -13,11 +13,17 @@ import { FAKE_HOST_STORAGE_KEY, LocalHostStore } from "./hostStore.ts";
 
 class MemoryStorage implements DeviceStorage {
   readonly items = new Map<string, string>();
+  /** Writes throw, as a full or locked-down storage does. */
+  failWrites = false;
   getItem(key: string): string | null {
     return this.items.get(key) ?? null;
   }
   setItem(key: string, value: string): void {
+    if (this.failWrites) throw new Error("QuotaExceededError");
     this.items.set(key, value);
+  }
+  removeItem(key: string): void {
+    this.items.delete(key);
   }
 }
 
@@ -95,30 +101,83 @@ describe("FakeCore storage: the host's settings and this device's", () => {
     expect(new LocalHostStore(storage).load()?.settings.agentName).toBe("Atlas");
   });
 
-  it("migrates the pre-seam settings once, into the device and the host, and leaves the old key alone", async () => {
-    const storage = new MemoryStorage();
-    const legacy = JSON.stringify({
+  /** What rc's shell stored: every setting, agents included, with connectors as people name them. */
+  function rcSettings(): string {
+    const rcAgent = (id: string, name: string, connectors: string[], patch: Record<string, unknown> = {}) => ({
+      id,
+      name,
+      avatar: name[0],
+      purpose: `${name} things`,
+      connectors,
+      schedule: { kind: "daily", at: "08:45" },
+      mode: "silent",
+      outputs: ["dashboard"],
+      state: "asleep",
+      ...patch,
+    });
+    return JSON.stringify({
       onboarded: true,
       devMode: true,
-      agentName: "Old",
+      engineHome: "~/.rlx-sandbox-2",
+      agentName: "Kai",
+      ownerName: "Ana Li",
+      family: "rlx",
       mode: "light",
-      agents: [{ id: "watcher", name: "Watcher", avatar: "W", purpose: "Watches", connectors: ["Slack"], schedule: { kind: "daily", at: "09:00" }, mode: "silent", outputs: ["channel"], state: "asleep" }],
+      sendModes: { "claude.ai Slack": "preapproved", "claude.ai Gmail": "draft", "claude.ai Linear": "draft" },
+      widgets: [{ id: "w-slack", type: "slack" }, { id: "w-linear", type: "generic", connector: "claude.ai Linear" }],
+      agents: [
+        rcAgent("meetings-agent", "Meetings agent", ["Google Calendar", "Meet transcripts (Google Drive)"], { state: "paused" }),
+        rcAgent("start-of-day", "Start of day", ["Google Calendar", "Meet transcripts (Google Drive)", "Gmail", "Slack"], {
+          role: "briefing",
+          schedule: { kind: "weekdays", at: "09:00" },
+          mode: "loud",
+          outputs: ["channel", "dashboard"],
+        }),
+      ],
     });
-    storage.setItem(LEGACY_SETTINGS_KEY, legacy);
+  }
+
+  it("migrates rc's settings once: device keys to the device, the rest to the host, then removes the old key", async () => {
+    const storage = new MemoryStorage();
+    storage.setItem(LEGACY_SETTINGS_KEY, rcSettings());
     const host = new MemoryHostStore();
     const device = new DeviceStore(storage);
     expect(migrateLegacySettings(storage, device, host)).toBe(true);
-    const { core } = make({ storage, device, host });
-    expect(core.snapshot().settings).toMatchObject({ onboarded: true, devMode: true, agentName: "Old", mode: "light" });
-    expect(core.snapshot().agents).toEqual([expect.objectContaining({ id: "watcher", jobId: "job-watcher", connectors: [SLACK] })]);
-    expect(storage.getItem(LEGACY_SETTINGS_KEY)).toBe(legacy);
+    expect(storage.getItem(LEGACY_SETTINGS_KEY)).toBeNull();
+    expect(JSON.parse(storage.getItem(DEVICE_STORAGE_KEY) ?? "{}")).toEqual({ onboarded: true, devMode: true, engineHome: "~/.rlx-sandbox-2" });
+    expect(host.load()?.settings).not.toHaveProperty("devMode");
 
-    // Once: later loads keep what changed since, and never read the old key again.
+    const { core } = make({ storage, device, host });
+    expect(core.snapshot().settings).toMatchObject({ onboarded: true, devMode: true, agentName: "Kai", ownerName: "Ana Li", mode: "light", sendModes: { [SLACK]: "preapproved" } });
+    expect(core.snapshot().settings.widgets).toEqual([
+      { id: "w-slack", type: "slack", agentId: undefined },
+      { id: "w-linear", type: "generic", connector: "claude.ai Linear", agentId: undefined },
+    ]);
+    const [meetings, startOfDay] = core.snapshot().agents;
+    expect(meetings).toMatchObject({ id: "meetings-agent", jobId: "job-meetings-agent", state: "paused", connectors: ["claude.ai Google Calendar", "claude.ai Google Drive"] });
+    expect(startOfDay).toMatchObject({ id: "start-of-day", jobId: "job-start-of-day", role: "briefing", connectors: ["claude.ai Google Calendar", "claude.ai Google Drive", GMAIL, SLACK] });
+
+    // Once: what changed since stays, and the old key is gone, so nothing migrates again.
     await core.updateSettings({ agentName: "New" });
     core.dispose();
     const again = new DeviceStore(storage);
     expect(migrateLegacySettings(storage, again, host)).toBe(false);
     expect(make({ storage, device: again, host }).core.snapshot().settings.agentName).toBe("New");
+  });
+
+  it("keeps rc's settings until the writes land: a failed write leaves the old key for the next launch", () => {
+    const storage = new MemoryStorage();
+    const legacy = rcSettings();
+    storage.setItem(LEGACY_SETTINGS_KEY, legacy);
+    storage.failWrites = true;
+    expect(migrateLegacySettings(storage, new DeviceStore(storage), new LocalHostStore(storage))).toBe(false);
+    expect(storage.getItem(LEGACY_SETTINGS_KEY)).toBe(legacy);
+
+    storage.failWrites = false;
+    const host = new LocalHostStore(storage);
+    expect(migrateLegacySettings(storage, new DeviceStore(storage), host)).toBe(true);
+    expect(storage.getItem(LEGACY_SETTINGS_KEY)).toBeNull();
+    expect(host.load()?.settings.agentName).toBe("Kai");
   });
 
   it("shares one DeviceStore between cores: a device setting changed in one shows in the other", async () => {
