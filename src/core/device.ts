@@ -8,7 +8,7 @@
  */
 import type { Unsubscribe } from "../engine/types.ts";
 import { connectorId } from "./connectors.ts";
-import { pickHost, type HostStore } from "./host.ts";
+import { pickHost, type HostData, type HostStore } from "./host.ts";
 import { jobIdFor, type Agent } from "../state/agents.ts";
 import { DEVICE_SETTING_KEYS, type AppSettings, type DeviceSettings, type WidgetInstance } from "../state/model.ts";
 
@@ -105,22 +105,40 @@ function migrateHostSettings(legacy: Record<string, unknown>): Partial<AppSettin
   return settings;
 }
 
+/** rc's host data, as the host keeps it: connectors spelled as ids, marked as migrated. Null without the old key. */
+export function legacyHostData(storage: DeviceStorage | null): HostData | null {
+  const legacy = read(storage, LEGACY_SETTINGS_KEY);
+  if (!legacy) return null;
+  const agents = Array.isArray(legacy.agents) ? (legacy.agents as Agent[]).map(migrateAgent) : [];
+  return { settings: migrateHostSettings(legacy), agents, migratedFrom: LEGACY_SETTINGS_KEY };
+}
+
+/** Whether rc's old key is still waiting to be migrated. */
+export function legacyPending(storage: DeviceStorage | null): boolean {
+  return read(storage, LEGACY_SETTINGS_KEY) !== null;
+}
+
 /**
  * Moves the pre-seam settings (rc's `rlx.settings.v1`) once: the host keys (names, theme, send
- * modes, widgets, agents) into the host's store, with connectors spelled as ids, then the device
- * keys into this device's store. Host first: until the host's write lands, nothing else changes,
- * so a failed attempt leaves everything for the next launch to retry. A store that already has
- * data is never overwritten. The old key goes only once both stores hold their part. Returns
- * whether the old key was moved and removed.
+ * modes, widgets, agents) into the host's store, with connectors spelled as ids and the
+ * `migratedFrom` marker, then the device keys into this device's store.
+ *
+ * - Host first: until the host's write reads back with its marker, nothing else changes, so a
+ *   failed attempt leaves everything for the next launch to retry.
+ * - A host blob without the marker is not the owner's data (a core wrote defaults before rc's
+ *   data arrived), so rc's data replaces it. A device that already stored its settings keeps them.
+ * - The old key goes only once both stores hold their part.
+ *
+ * Returns whether the old key was moved and removed.
  */
 export function migrateLegacySettings(storage: DeviceStorage | null, device: DeviceStore, host: HostStore): boolean {
-  const legacy = read(storage, LEGACY_SETTINGS_KEY);
-  if (!storage || !legacy) return false;
-  if (!host.load()) {
-    const agents = Array.isArray(legacy.agents) ? (legacy.agents as Agent[]).map(migrateAgent) : [];
-    host.save({ settings: migrateHostSettings(legacy), agents });
-    if (!host.load()) return false;
+  const data = legacyHostData(storage);
+  if (!storage || !data) return false;
+  if (host.load()?.migratedFrom !== LEGACY_SETTINGS_KEY) {
+    host.save(data);
+    if (host.load()?.migratedFrom !== LEGACY_SETTINGS_KEY) return false;
   }
+  const legacy = read(storage, LEGACY_SETTINGS_KEY) ?? {};
   if (!device.hasStored() && !(device.update(pickDevice(legacy)) && read(storage, DEVICE_STORAGE_KEY) !== null)) return false;
   try {
     storage.removeItem(LEGACY_SETTINGS_KEY);

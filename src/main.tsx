@@ -2,9 +2,9 @@ import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import "./theme/tokens.css";
 import { App } from "./App.tsx";
-import { DeviceStore, deviceStorage, migrateLegacySettings } from "./core/device.ts";
+import { DeviceStore, deviceStorage } from "./core/device.ts";
 import { FakeCore } from "./core/fake/FakeCore.ts";
-import { LocalHostStore } from "./core/fake/hostStore.ts";
+import { openFakeHost } from "./core/fake/hostStore.ts";
 import { FakeEngine } from "./engine/fake/FakeEngine.ts";
 import { whenFirstPaint } from "./platform/firstPaint.ts";
 import { detectPlatform } from "./platform/index.ts";
@@ -17,8 +17,8 @@ const platform = detectPlatform();
 const storage = deviceStorage();
 // The device's settings outlive any one host's core (sessions switch hosts).
 const device = new DeviceStore(storage);
-const host = new LocalHostStore(storage);
-migrateLegacySettings(storage, device, host);
+// Migrates rc's old settings key first; a migration that can't finish keeps this launch's host in memory.
+const host = openFakeHost(storage, device);
 const engine = new FakeEngine();
 // The browser checks seed the fake host's settings through this (e2e/web/helpers.ts).
 const seed = (globalThis as { rlxFakeHost?: Partial<Settings> }).rlxFakeHost;

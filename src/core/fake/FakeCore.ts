@@ -100,6 +100,8 @@ export class FakeCore implements Core {
   private readsApplied = 0;
   private pendingSeq = 0;
   private disposed = false;
+  /** The host blob's migration marker, kept on every save. */
+  private readonly migratedFrom?: string;
 
   constructor(options: FakeCoreOptions) {
     this.engine = options.engine;
@@ -107,6 +109,7 @@ export class FakeCore implements Core {
     this.host = options.host ?? new MemoryHostStore();
     this.now = options.now ?? Date.now;
     const stored = this.host.load();
+    this.migratedFrom = stored?.migratedFrom;
     const now = this.now();
     const agents = options.agents ?? (stored?.agents.length ? stored.agents : seedAgents(now));
     const hostSettings = { ...DEFAULT_APP_SETTINGS, ...stored?.settings, ...pickHost(options.settings ?? {}) };
@@ -161,7 +164,8 @@ export class FakeCore implements Core {
 
   /** The host keeps its app settings and the agent definitions (rlxd's settings API). */
   private saveHost(): void {
-    this.host.save({ settings: pickHost(this.state.settings), agents: this.state.agents });
+    const data = { settings: pickHost(this.state.settings), agents: this.state.agents };
+    this.host.save(this.migratedFrom ? { ...data, migratedFrom: this.migratedFrom } : data);
   }
 
   view(surface: Surface | null): void {

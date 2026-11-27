@@ -9,6 +9,12 @@ import type { Agent } from "../state/agents.ts";
 export interface HostData {
   settings: Partial<AppSettings>;
   agents: Agent[];
+  /**
+   * Set by the migration from rc's single settings key: this blob holds the owner's own data.
+   * Until it's set, while that key exists, the blob is only what a core wrote before rc's data
+   * arrived (defaults, demo agents), and rc's data replaces it.
+   */
+  migratedFrom?: string;
 }
 
 export interface HostStore {

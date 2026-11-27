@@ -9,18 +9,20 @@ import { HOLD_MS } from "../gate.ts";
 import { MemoryHostStore, type HostStore } from "../host.ts";
 import { APPROVE_CHOICE, DISCARD_CHOICE, pendingUnread, type PendingItem } from "../pending.ts";
 import { FakeCore } from "./FakeCore.ts";
-import { FAKE_HOST_STORAGE_KEY, LocalHostStore } from "./hostStore.ts";
+import { FAKE_HOST_STORAGE_KEY, LocalHostStore, openFakeHost } from "./hostStore.ts";
 
 class MemoryStorage implements DeviceStorage {
   readonly items = new Map<string, string>();
   /** Writes throw, as a full or locked-down storage does: all of them, or to these keys. */
   failWrites = false;
   readonly failKeys = new Set<string>();
+  /** Keys whose next write throws, once. */
+  readonly failOnce = new Set<string>();
   getItem(key: string): string | null {
     return this.items.get(key) ?? null;
   }
   setItem(key: string, value: string): void {
-    if (this.failWrites || this.failKeys.has(key)) throw new Error("QuotaExceededError");
+    if (this.failOnce.delete(key) || this.failWrites || this.failKeys.has(key)) throw new Error("QuotaExceededError");
     this.items.set(key, value);
   }
   removeItem(key: string): void {
@@ -134,8 +136,17 @@ describe("FakeCore storage: the host's settings and this device's", () => {
           mode: "loud",
           outputs: ["channel", "dashboard"],
         }),
+        rcAgent("my-own", "My own", ["Slack"], { mode: "loud", outputs: ["channel"] }),
       ],
     });
+  }
+
+  /** One launch of the preview, in main.tsx's order: the device store, the host (migrating first), then the core. */
+  function launch(storage: MemoryStorage, host: (device: DeviceStore) => HostStore = (device) => openFakeHost(storage, device)) {
+    const device = new DeviceStore(storage);
+    const core = new FakeCore({ engine: new FakeEngine({ stepMs: 5, seed: false }), device, host: host(device) });
+    cores.push(core);
+    return core;
   }
 
   it("migrates rc's settings once: device keys to the device, the rest to the host, then removes the old key", async () => {
@@ -199,6 +210,50 @@ describe("FakeCore storage: the host's settings and this device's", () => {
     const { core } = make({ storage, device, host });
     expect(core.snapshot().settings).toMatchObject({ onboarded: true, devMode: true, agentName: "Kai", ownerName: "Ana Li", mode: "light" });
     expect(core.snapshot().agents.find((a) => a.id === "meetings-agent")?.state).toBe("paused");
+  });
+
+  it("in main.tsx's launch order, a host write that fails once never costs rc's data", () => {
+    const storage = new MemoryStorage();
+    storage.setItem(LEGACY_SETTINGS_KEY, rcSettings());
+    storage.failOnce.add(FAKE_HOST_STORAGE_KEY);
+
+    // Launch 1: the migration's host write throws; this launch runs on rc's data, in memory.
+    const first = launch(storage);
+    expect(first.snapshot().settings).toMatchObject({ agentName: "Kai", ownerName: "Ana Li", mode: "light" });
+    expect(storage.getItem(FAKE_HOST_STORAGE_KEY)).toBeNull();
+    expect(storage.getItem(LEGACY_SETTINGS_KEY)).not.toBeNull();
+    first.dispose();
+
+    // Launch 2, healthy: it migrates fully, and the old key goes.
+    const second = launch(storage);
+    expect(second.snapshot().settings).toMatchObject({ onboarded: true, devMode: true, agentName: "Kai", ownerName: "Ana Li", mode: "light" });
+    expect(second.snapshot().agents.map((a) => a.id)).toContain("my-own");
+    expect(storage.getItem(LEGACY_SETTINGS_KEY)).toBeNull();
+    expect(JSON.parse(storage.getItem(FAKE_HOST_STORAGE_KEY) ?? "{}")).toMatchObject({ migratedFrom: LEGACY_SETTINGS_KEY, settings: { agentName: "Kai" } });
+
+    // Launch 3: the owner's own changes stay.
+    void second.updateSettings({ agentName: "Kai 2" });
+    second.dispose();
+    expect(launch(storage).snapshot().settings.agentName).toBe("Kai 2");
+  });
+
+  it("never takes defaults a core wrote before rc's data arrived for the owner's data", () => {
+    const storage = new MemoryStorage();
+    storage.setItem(LEGACY_SETTINGS_KEY, rcSettings());
+    storage.failOnce.add(FAKE_HOST_STORAGE_KEY);
+    // A launch that migrates, fails, and then lets its core save defaults to the real host anyway.
+    const first = launch(storage, (device) => {
+      const host = new LocalHostStore(storage);
+      migrateLegacySettings(storage, device, host);
+      return host;
+    });
+    expect(JSON.parse(storage.getItem(FAKE_HOST_STORAGE_KEY) ?? "{}")).toMatchObject({ settings: { agentName: "Nova" } });
+    first.dispose();
+
+    const second = launch(storage);
+    expect(second.snapshot().settings).toMatchObject({ agentName: "Kai", ownerName: "Ana Li" });
+    expect(second.snapshot().agents.map((a) => a.id)).toEqual(["meetings-agent", "start-of-day", "my-own"]);
+    expect(storage.getItem(LEGACY_SETTINGS_KEY)).toBeNull();
   });
 
   it("finishes a migration an earlier build left half done: the device was written, the host wasn't", () => {
