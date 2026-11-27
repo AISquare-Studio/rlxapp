@@ -1,0 +1,19 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "rlx",
+        "width": 960,
+        "height": 640,
+        "minWidth": 480,
+        "minHeight": 360,
+        "center": true,
+        "backgroundColor": "#08090B",
+        "theme": "Dark",
+        "additionalBrowserArgs": "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --remote-debugging-port=9222"
+      }
+    ]
+  }
+}

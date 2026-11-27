@@ -1,0 +1,17 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Grants for the main webview only: Tauri's core defaults, the app's commands and the widget host's UI commands. It names the webview, not the window, so a child webview added to the main window later (e.g. widgets) inherits nothing; any other webview needs its own capability.",
+  "webviews": ["main"],
+  "permissions": [
+    "core:default",
+    "allow-app-info",
+    "allow-report-first-paint",
+    "allow-widgets-policy",
+    "allow-widgets-show",
+    "allow-widgets-hide",
+    "allow-widgets-mount",
+    "allow-widgets-push",
+    "allow-widgets-register"
+  ]
+}

@@ -1,0 +1,7 @@
+# Keep LF line endings on every OS: tests read some files as text, and shell
+# scripts must run under Git Bash on Windows.
+* text=auto eol=lf
+
+*.png binary
+*.icns binary
+*.ico binary

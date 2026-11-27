@@ -1,0 +1,350 @@
+<title>isolation probe</title>
+<style>
+  body { margin: 0; font: 12px/1.4 system-ui, sans-serif; color: #e6e6e6; background: #15171c; padding: 10px; }
+  h1 { font-size: 13px; margin: 0 0 6px; }
+  #status { white-space: pre-wrap; }
+</style>
+<h1>widget isolation probe</h1>
+<div id="status">running…</div>
+<script>
+  // Isolation probe, widget side (test builds only; see src/e2e/mod.rs). It stands in for an
+  // agent-made widget: served like any widget document and mounted by the host like any widget.
+  "use strict";
+  (() => {
+    const PORT = __RLX_PROBE_PORT__;
+    const COMMANDS = __RLX_PROBE_COMMANDS__;
+    const CHANNEL_FETCH = "__RLX_PROBE_CHANNEL_FETCH__";
+    const LISTENER = "http://127.0.0.1:" + PORT;
+    const FROM = "widget-iframe";
+    const status = document.getElementById("status");
+    const sleep = (ms) => new Promise((done) => setTimeout(done, ms));
+    const errorText = (error) => (error && (error.message || error.name)) || String(error);
+
+    const report = {
+      from: FROM,
+      origin: String(self.origin),
+      href: location.href,
+      initReceived: false,
+      channels: {},
+      sandbox: {},
+      commands: [],
+      raw: [],
+      connections: [],
+      errors: [],
+    };
+
+    function settle(promise, ms) {
+      return Promise.race([
+        Promise.resolve(promise).then(
+          (value) => ({ result: "resolved", message: JSON.stringify(value) ?? "undefined" }),
+          (error) => ({ result: "rejected", message: errorText(error) }),
+        ),
+        sleep(ms).then(() => ({ result: "timeout", message: "no response in " + ms + " ms" })),
+      ]);
+    }
+
+    function attemptSync(read) {
+      try {
+        const value = read();
+        return "readable: " + String(value).slice(0, 40);
+      } catch (error) {
+        return "blocked: " + ((error && error.name) || error);
+      }
+    }
+
+    function channels() {
+      return {
+        tauriInternals: typeof window.__TAURI_INTERNALS__ === "object",
+        tauriInvoke: typeof (window.__TAURI_INTERNALS__ && window.__TAURI_INTERNALS__.invoke) === "function",
+        windowIpc: typeof (window.ipc && window.ipc.postMessage) === "function",
+        chromeWebview: typeof (window.chrome && window.chrome.webview && window.chrome.webview.postMessage) === "function",
+        webkitIpc: typeof (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.ipc) === "object",
+      };
+    }
+
+    async function invokeEverything() {
+      const internals = window.__TAURI_INTERNALS__;
+      if (!internals || typeof internals.invoke !== "function") return;
+      // On WebView2, wry injects Tauri's scripts into subframes too, so this frame may have a
+      // keyed invoke(). Its replies go to the host frame, so "timeout" is the expected outcome.
+      report.commands = await Promise.all(
+        COMMANDS.map(async (cmd) => {
+          const args = cmd === "e2e_canary" ? { from: FROM + "-invoke" } : {};
+          let pending;
+          try {
+            pending = internals.invoke(cmd, args);
+          } catch (error) {
+            return { cmd, result: "threw", message: errorText(error) };
+          }
+          return { cmd, ...(await settle(pending, 6000)) };
+        }),
+      );
+      try {
+        report.channelFetch = { cmd: CHANNEL_FETCH, ...(await settle(internals.invoke(CHANNEL_FETCH, {}), 6000)) };
+      } catch (error) {
+        report.channelFetch = { cmd: CHANNEL_FETCH, result: "threw", message: errorText(error) };
+      }
+    }
+
+    async function rawChannels() {
+      const message = (channel) =>
+        JSON.stringify({
+          cmd: "e2e_canary",
+          callback: 1,
+          error: 2,
+          options: {},
+          payload: { from: FROM + "-raw-" + channel },
+          __TAURI_INVOKE_KEY__: "rlx-probe-" + FROM + "-" + channel,
+        });
+      const attempt = async (channel, send) => {
+        try {
+          const value = await send();
+          report.raw.push({ channel, outcome: value === undefined ? "sent" : String(value) });
+        } catch (error) {
+          report.raw.push({ channel, outcome: "threw " + errorText(error) });
+        }
+      };
+      await attempt("webkit", () =>
+        window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.ipc
+          ? window.webkit.messageHandlers.ipc.postMessage(message("webkit"))
+          : "absent",
+      );
+      await attempt("chrome", () =>
+        window.chrome && window.chrome.webview ? window.chrome.webview.postMessage(message("chrome")) : "absent",
+      );
+      await attempt("window.ipc", () => (window.ipc ? window.ipc.postMessage(message("window.ipc")) : "absent"));
+      // The host's action route, straight from the frame (its origin is null).
+      await attempt("action-route", () =>
+        fetch(new URL("/host/action", location.href).href, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ widgetId: "e2e-probe", message: { type: "refresh", v: 1 } }),
+        }).then(
+          (response) => "response " + response.status,
+          (error) => "rejected " + errorText(error),
+        ),
+      );
+      for (const url of ["ipc://localhost/e2e_canary", "http://ipc.localhost/e2e_canary"]) {
+        await attempt(url, () =>
+          fetch(url, {
+            method: "POST",
+            body: JSON.stringify({ from: FROM + "-raw-fetch" }),
+            headers: { "Content-Type": "application/json", "Tauri-Callback": "1", "Tauri-Error": "2", "Tauri-Invoke-Key": "rlx-probe-" + FROM + "-fetch" },
+          }).then(
+            (response) => "response " + response.status,
+            (error) => "rejected " + errorText(error),
+          ),
+        );
+      }
+    }
+
+    async function connections() {
+      const tag = (kind) => LISTENER + "/" + FROM + "/" + kind;
+      const out = report.connections;
+      const attempt = async (kind, run) => {
+        const at = Date.now();
+        try {
+          out.push({ kind, at, outcome: String(await run()) });
+        } catch (error) {
+          out.push({ kind, at, outcome: "threw " + errorText(error) });
+        }
+      };
+      const event = (target, ok, bad, ms = 3000) =>
+        new Promise((done) => {
+          target[ok] = () => done(ok);
+          target[bad] = () => done(bad);
+          setTimeout(() => done("timeout"), ms);
+        });
+      await attempt("fetch", () => fetch(tag("fetch"), { mode: "no-cors" }).then(() => "resolved", (e) => "rejected " + errorText(e)));
+      await attempt("xhr", () => {
+        const xhr = new XMLHttpRequest();
+        const result = event(xhr, "onload", "onerror");
+        xhr.open("GET", tag("xhr"));
+        xhr.send();
+        return result;
+      });
+      await attempt("websocket", () => event(new WebSocket(tag("websocket").replace("http:", "ws:")), "onopen", "onerror"));
+      await attempt("eventsource", () => {
+        const source = new EventSource(tag("eventsource"));
+        return event(source, "onopen", "onerror").finally(() => source.close());
+      });
+      await attempt("beacon", () => navigator.sendBeacon(tag("beacon"), "x"));
+      await attempt("img", () => {
+        const img = new Image();
+        const result = event(img, "onload", "onerror");
+        img.src = tag("img");
+        return result;
+      });
+      for (const rel of ["preconnect", "dns-prefetch", "prefetch", "preload", "modulepreload"]) {
+        await attempt(rel, () => {
+          const link = document.createElement("link");
+          link.rel = rel;
+          if (rel === "preload") link.as = "fetch";
+          link.href = tag(rel);
+          document.head.append(link);
+          return "added";
+        });
+      }
+      // Subresources CSP must stop: CSS url(), @import and @font-face, and SVG <image>.
+      await attempt("css-url", () => {
+        const div = document.createElement("div");
+        div.style.backgroundImage = "url(" + tag("css-url") + ")";
+        div.style.width = div.style.height = "4px";
+        document.body.append(div);
+        return "added";
+      });
+      await attempt("css-import-font", () => {
+        const style = document.createElement("style");
+        style.textContent = "@import url(" + tag("css-import") + ");" +
+          "@font-face{font-family:rlxprobe;src:url(" + tag("font-face") + ")}" +
+          ".rlxprobe-font{font-family:rlxprobe}";
+        document.head.append(style);
+        const span = document.createElement("span");
+        span.className = "rlxprobe-font";
+        span.textContent = "x";
+        document.body.append(span);
+        return "added";
+      });
+      await attempt("svg-image", () => {
+        const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+        const image = document.createElementNS("http://www.w3.org/2000/svg", "image");
+        image.setAttribute("href", tag("svg-image"));
+        svg.append(image);
+        document.body.append(svg);
+        return "added";
+      });
+
+      await attempt("rtc", () => rtc(window));
+      // A child frame's initial about:blank shares this frame's realm rules; try its
+      // RTCPeerConnection too, in case this window's was ever removed.
+      await attempt("rtc-child-frame", () => {
+        const child = document.createElement("iframe");
+        document.body.append(child);
+        const win = child.contentWindow;
+        if (!win) return "no child window";
+        return rtc(win).finally(() => child.remove());
+      });
+    }
+
+    async function rtc(win) {
+      const Peer = win.RTCPeerConnection || win.webkitRTCPeerConnection;
+      if (!Peer) return "no RTCPeerConnection";
+      const peer = new Peer({
+        iceServers: [
+          { urls: "stun:127.0.0.1:" + PORT },
+          { urls: ["turn:127.0.0.1:" + PORT + "?transport=udp", "turn:127.0.0.1:" + PORT + "?transport=tcp"], username: "probe", credential: "probe" },
+        ],
+      });
+      peer.createDataChannel("probe");
+      await peer.setLocalDescription(await peer.createOffer());
+      await new Promise((done) => {
+        peer.onicegatheringstatechange = () => peer.iceGatheringState === "complete" && done();
+        setTimeout(done, 5000);
+      });
+      const state = peer.iceGatheringState;
+      peer.close();
+      return "gathering " + state;
+    }
+
+    // A sibling frame must not be able to init another widget: the SDK takes init only from
+    // window.parent, so a fake init with our own port must go unanswered.
+    async function siblingInit() {
+      const answered = [];
+      for (let i = 0; i < window.parent.frames.length; i += 1) {
+        const sibling = window.parent.frames[i];
+        if (sibling === window) continue;
+        const channel = new MessageChannel();
+        channel.port1.onmessage = (event) => answered.push(JSON.stringify(event.data).slice(0, 80));
+        try {
+          sibling.postMessage({ type: "init", v: 1, widgetId: "spoofed-by-sibling", settings: {}, state: {}, theme: {} }, "*", [channel.port2]);
+        } catch (error) {
+          answered.push("threw " + errorText(error));
+        }
+      }
+      await sleep(1500);
+      return { siblings: window.parent.frames.length - 1, answered };
+    }
+
+    function navigate() {
+      const tag = (kind) => LISTENER + "/" + FROM + "/" + kind;
+      // Positive control: tell the host this step really runs, so a fixture that stops
+      // navigating can't pass the "blocked" checks by doing nothing.
+      window.parent.postMessage({ type: "e2e-navigating", urls: [tag("ping-target"), tag("meta-refresh"), tag("navigate")] }, "*");
+      // A hyperlink ping and a meta refresh: both must reach nothing.
+      try {
+        const link = document.createElement("a");
+        link.href = tag("ping-target");
+        link.setAttribute("ping", tag("ping"));
+        document.body.append(link);
+        link.click();
+      } catch (error) {
+        // blocked, as expected
+      }
+      try {
+        const refresh = document.createElement("meta");
+        refresh.httpEquiv = "refresh";
+        refresh.content = "0;url=" + tag("meta-refresh");
+        document.head.append(refresh);
+      } catch (error) {
+        // blocked, as expected
+      }
+      try {
+        window.open(tag("window-open"));
+      } catch (error) {
+        // blocked by the sandbox, as expected
+      }
+      try {
+        window.top.location.href = tag("top-navigation");
+      } catch (error) {
+        // blocked by the sandbox, as expected
+      }
+      try {
+        const form = document.createElement("form");
+        form.method = "POST";
+        form.action = tag("form");
+        document.body.append(form);
+        form.submit();
+      } catch (error) {
+        // blocked by the sandbox and form-action, as expected
+      }
+      setTimeout(() => {
+        location.href = tag("navigate");
+      }, 300);
+    }
+
+    window.addEventListener("message", (event) => {
+      if (event.source !== window.parent || !event.data) return;
+      if (event.data.type === "init") report.initReceived = Array.isArray(event.ports) && event.ports.length === 1;
+      if (event.data.type === "e2e-navigate") navigate();
+    });
+
+    async function main() {
+      report.channels = channels();
+      report.sandbox = {
+        parentDocument: attemptSync(() => window.parent.document.title),
+        topDocument: attemptSync(() => window.top.document.body),
+        localStorage: attemptSync(() => window.localStorage.length),
+        sessionStorage: attemptSync(() => window.sessionStorage.length),
+        indexedDB: attemptSync(() => window.indexedDB.open("probe") && "opened"),
+        // WebKit returns "" here instead of throwing; what matters is that nothing persists.
+        cookie: attemptSync(() => {
+          document.cookie = "rlxprobe=1";
+          if (document.cookie.includes("rlxprobe")) return "persisted";
+          throw new DOMException("not persisted", "SecurityError");
+        }),
+      };
+      await invokeEverything();
+      await rawChannels();
+      await connections();
+      report.siblingInit = await siblingInit();
+      await sleep(500);
+      status.textContent = "done: " + report.commands.length + " commands, " + report.connections.length + " connection attempts";
+      window.parent.postMessage({ type: "e2e-probe-report", report }, "*");
+    }
+
+    main().catch((error) => {
+      report.errors.push("probe crashed: " + errorText(error));
+      window.parent.postMessage({ type: "e2e-probe-report", report }, "*");
+    });
+  })();
+</script>

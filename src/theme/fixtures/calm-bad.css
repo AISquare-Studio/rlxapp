@@ -1,0 +1,19 @@
+/* Fixture: everything the calm lint must reject. Never imported by the app. */
+.a { border-left: 3px solid red; }
+.b { border: 2px solid var(--rlx-border-color); color: #ff0000; }
+.c {
+  border-right:
+    3px solid var(--rlx-accent);
+}
+.d { --rlx-border-width: 3px; }
+.e { --bar: inset 3px 0 0 var(--rlx-accent); box-shadow: var(--bar); }
+.f { box-shadow: -3px 0 0 0 var(--rlx-primary); }
+.g { border-width: 0 0 0 var(--rlx-border-width); }
+.h { background: rebeccapurple; color: darkred; }
+.i { border: var(--rlx-border-width) solid var(--rlx-primary); }
+.j::before { content: ""; position: absolute; top: 0; bottom: 0; left: 0; width: 3px; background: var(--rlx-accent); }
+.k { background: linear-gradient(90deg, var(--rlx-accent) 3px, transparent 3px); }
+.l { text-decoration: underline 3px var(--rlx-accent); }
+.m { border-color: var(--rlx-warning); }
+.n { font-size: 13px; border-radius: 7px; padding: 5px; }
+.o { outline: 3px solid var(--rlx-accent); }

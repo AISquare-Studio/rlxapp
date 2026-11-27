@@ -1,0 +1,53 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "rlx",
+  "version": "../package.json",
+  "identifier": "studio.aisquare.rlx",
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "devUrl": "http://localhost:1420",
+    "beforeBuildCommand": "npm run build",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "rlx",
+        "width": 960,
+        "height": 640,
+        "minWidth": 480,
+        "minHeight": 360,
+        "center": true,
+        "backgroundColor": "#08090B",
+        "theme": "Dark"
+      }
+    ],
+    "security": {
+      "csp": {
+        "default-src": "'self'",
+        "connect-src": "'self' ipc: http://ipc.localhost",
+        "img-src": "'self' data:",
+        "style-src": "'self'",
+        "frame-src": "'none'",
+        "object-src": "'none'",
+        "base-uri": "'none'",
+        "form-action": "'none'"
+      }
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "category": "Productivity",
+    "shortDescription": "Run rlx agents in the background",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ]
+  }
+}

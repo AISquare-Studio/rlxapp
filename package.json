@@ -1,0 +1,46 @@
+{
+  "name": "rlxapp",
+  "private": true,
+  "version": "0.1.0",
+  "license": "MIT",
+  "type": "module",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc -b && vite build",
+    "preview": "vite preview",
+    "tauri": "tauri",
+    "lint": "oxlint --deny-warnings && node scripts/lint-calm.mjs",
+    "typecheck": "tsc -b",
+    "test": "vitest run",
+    "smoke": "node scripts/smoke-test.mjs",
+    "icons": "node scripts/gen-icons.mjs",
+    "e2e:build": "tauri build --debug --no-bundle --features e2e --config src-tauri/tauri.e2e.conf.json",
+    "e2e": "node e2e/native/run.mjs",
+    "e2e:web": "playwright test",
+    "gallery": "GALLERY=1 playwright test e2e/web/gallery.spec.ts"
+  },
+  "dependencies": {
+    "@tauri-apps/api": "^2.12.5",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.65.1",
+    "@tauri-apps/cli": "^2.12.6",
+    "@testing-library/dom": "^10.4.2",
+    "@testing-library/react": "^16.3.3",
+    "@types/node": "^24.19.4",
+    "@types/react": "^19.3.3",
+    "@types/react-dom": "^19.3.0",
+    "@vitejs/plugin-react": "^6.3.0",
+    "jsdom": "^31.0.1",
+    "oxlint": "^1.95.0",
+    "postcss": "^8.5.33",
+    "typescript": "~7.0.2",
+    "vite": "^8.3.8",
+    "vitest": "^5.1.2"
+  }
+}

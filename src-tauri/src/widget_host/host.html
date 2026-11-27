@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="referrer" content="no-referrer" />
+    <title>rlx widgets</title>
+    <style>
+      /* The host page draws no chrome of its own: each widget draws its own card. Spacing and
+         radius come from these tokens (8 px grid), matching the app's calm design rules. */
+      :root {
+        --rlx-space-2: 8px;
+        --rlx-space-4: 16px;
+        --rlx-radius: 8px;
+        --rlx-widget-min: 160px;
+      }
+      html,
+      body {
+        margin: 0;
+        height: 100%;
+        background: transparent;
+        overflow: hidden;
+      }
+      #grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(var(--rlx-widget-min), 1fr));
+        gap: var(--rlx-space-4);
+        padding: var(--rlx-space-2);
+      }
+      #grid iframe {
+        width: 100%;
+        height: var(--rlx-widget-min);
+        border: 0;
+        border-radius: var(--rlx-radius);
+        background: transparent;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="grid"></div>
+    <script src="/host/host.js"></script>
+    <!--extra-scripts-->
+  </body>
+</html>
