@@ -5,6 +5,7 @@ import iconMaster from "../../src-tauri/icons/master.svg?raw";
 import logo from "../assets/rlx-logo.svg?raw";
 import { RLX_MARK_PATHS } from "./mark.ts";
 import { RlxMark } from "./RlxMark.tsx";
+import { Splash } from "./Splash.tsx";
 
 function pathData(svg: string): string[] {
   return [...svg.matchAll(/<path\b[^>]*\sd="([^"]+)"/g)].map((match) => match[1] ?? "");
@@ -37,5 +38,24 @@ describe("rlx logo", () => {
     const rendered = [...container.querySelectorAll("path")].map((path) => path.getAttribute("d"));
     expect(rendered).toEqual(LOGO_PATHS);
     expect(container.querySelector("svg")?.getAttribute("viewBox")).toBe("0 0 1606 940");
+  });
+
+  it("is used unchanged by the splash screen", () => {
+    const { getByTestId } = render(<Splash />);
+    const rendered = [...getByTestId("splash").querySelectorAll("path")].map((path) => path.getAttribute("d"));
+    expect(rendered).toEqual(LOGO_PATHS);
+  });
+});
+
+describe("onboarding brand header", () => {
+  it("shows the r\\x mark in a <header>, as the native screen check (e2e/native) looks for on a fresh launch", async () => {
+    const { App } = await import("../App.tsx");
+    const { FakeEngine } = await import("../engine/fake/FakeEngine.ts");
+    const { browserPlatform } = await import("../platform/index.ts");
+    const { DEFAULT_SETTINGS } = await import("../state/model.ts");
+    const view = render(<App platform={browserPlatform} engine={new FakeEngine({ seed: false })} initialSettings={{ ...DEFAULT_SETTINGS }} />);
+    await view.findByRole("button", { name: "Get started" });
+    const mark = document.querySelector('header svg[aria-label="rlx"]');
+    expect([...(mark?.querySelectorAll("path") ?? [])].map((p) => p.getAttribute("d"))).toEqual(LOGO_PATHS);
   });
 });

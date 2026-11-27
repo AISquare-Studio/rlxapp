@@ -23,6 +23,7 @@ describe("detectPlatform", () => {
       os: "browser",
       arch: "n/a",
       runtime: "browser",
+      measuring: false,
     });
     await expect(platform.reportFirstPaint(1, "fcp")).resolves.toBeUndefined();
   });
@@ -40,7 +41,7 @@ describe("nativePlatform", () => {
     mockIPC((cmd) => {
       calls.push(cmd);
       if (cmd === "app_info") {
-        return { name: "rlx", version: "0.1.0", os: "linux", arch: "x86_64" };
+        return { name: "rlx", version: "0.1.0", os: "linux", arch: "x86_64", measuring: true };
       }
       throw new Error(`unexpected command ${cmd}`);
     });
@@ -50,6 +51,7 @@ describe("nativePlatform", () => {
       version: "0.1.0",
       os: "linux",
       arch: "x86_64",
+      measuring: true,
       runtime: "native",
     });
     expect(calls).toEqual(["app_info"]);
@@ -69,5 +71,33 @@ describe("nativePlatform", () => {
     await nativePlatform.reportFirstPaint(1_700_000_000_123.5, "fcp");
 
     expect(received).toEqual({ epochMs: 1_700_000_000_123.5, source: "fcp" });
+  });
+});
+
+describe("widgetSource", () => {
+  it("keeps agent-made widgets off in the app while the host's policy says so, and registers nothing", async () => {
+    enterTauri();
+    const calls: string[] = [];
+    mockIPC((cmd) => {
+      calls.push(cmd);
+      if (cmd === "widgets_policy") {
+        return { widgetWebview: true, builtins: "widgets", agentWidgets: "off: off on macOS until the isolation probe passes there" };
+      }
+      throw new Error(`unexpected command ${cmd}`);
+    });
+    await expect(nativePlatform.widgetPolicy()).resolves.toEqual({
+      widgetWebview: true,
+      builtins: "widgets",
+      agentWidgets: { on: false, reason: "off on macOS until the isolation probe passes there" },
+    });
+    await expect(nativePlatform.widgetSource("w", 1, "<p>hi</p>")).resolves.toEqual({
+      off: "off on macOS until the isolation probe passes there",
+    });
+    expect(calls).toEqual(["widgets_policy"]);
+  });
+
+  it("renders them inline in the browser preview, which has no widget webview", async () => {
+    await expect(browserPlatform.widgetSource("w", 1, "<p>hi</p>")).resolves.toEqual({ srcdoc: "<p>hi</p>" });
+    await expect(browserPlatform.widgetPolicy()).resolves.toEqual({ widgetWebview: false, builtins: "main", agentWidgets: { on: true } });
   });
 });
