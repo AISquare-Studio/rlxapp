@@ -97,6 +97,11 @@ export function AgentFrame({ id, version, title, html, data }: AgentFrameProps) 
       </div>
     );
   if ("host" in source) return <HostedFrame id={source.host.id} version={source.host.version} title={title} data={data} />;
+  // The browser preview only (never the app, whose main CSP allows no frames): the agent
+  // widget's own document, inline in its sandboxed frame. Not connector text, so the lint's
+  // srcdoc ban (.oxlintrc.json) doesn't apply here.
+  // oxlint-disable-next-line eslint/no-restricted-properties
+  const doc = withColorScheme(source.srcdoc, scheme);
   return (
     <div className={`agent-frame-wrap${focused ? " is-focused" : ""}`}>
       <iframe
@@ -110,7 +115,7 @@ export function AgentFrame({ id, version, title, html, data }: AgentFrameProps) 
       data-testid="agent-widget-frame"
       onLoad={onLoad}
         data-scheme={scheme}
-        srcDoc={withColorScheme(source.srcdoc, scheme)}
+        srcDoc={doc}
       />
     </div>
   );

@@ -19,9 +19,17 @@
 //!   from the `widgets` label and the host origin, then validated against §5.2.
 //! - **Navigation** in the widgets webview stays on the scheme ([`allow_navigation`]), and the
 //!   host CSP's frame-src holds every frame there. New windows are denied.
-//! - **WebRTC** is removed from every frame (frames.js), since CSP doesn't govern it.
+//! - **WebRTC** is removed from every frame (frames.js): neither CSP nor the deny-all proxy
+//!   governs it, on any OS (measured; see [`proxy`]), so frames.js is its only barrier.
+//! - **Network.** The widgets webview runs behind a deny-all proxy where the OS has a
+//!   per-webview proxy ([`proxy`], which has the OS-capability matrix and the measured
+//!   residual), since CSP doesn't govern preconnect either. It keeps its own data store, web
+//!   context or WebView2 environment, so main's networking is untouched ([`isolation`]).
 //! - **The switch.** [`policy`] keeps agent-made widgets off on every OS until the isolation
-//!   probe passes there and the owner turns them on.
+//!   probe passes there and the owner turns them on. Even with it on, an agent-made widget
+//!   registers only on an eligible machine with the running deny-all proxy
+//!   ([`proxy::ensure_eligible`]): never on macOS, where WebKit's DNS prefetch leaks names
+//!   outside the proxy (and macOS 13 or older has no proxy at all).
 //!
 //! # Per OS in v0 ([`policy`])
 //! - macOS: built-ins render in the widget webview. Agent-made widgets are off.
@@ -35,7 +43,8 @@
 //! # API for the UI (main webview only; see commands.rs)
 //! The commands are granted to `main` in capabilities/default.json. Through `invoke`:
 //! - `widgets_policy()` → [`PolicyInfo`]: whether a widget webview exists, where built-ins
-//!   render (`"widgets"` or `"main"`), and the agent-widget switch.
+//!   render (`"widgets"` or `"main"`), the agent-widget switch, whether this machine is
+//!   eligible for agent-made widgets at all, and the measured residual that decides it.
 //! - `widgets_show({ bounds })` (async): attach the widgets webview on first use, then place
 //!   and show it. `bounds` is `{ x, y, width, height }` in logical px relative to the window:
 //!   the Home grid's rect. Call it again on every layout change. It fails where
@@ -57,6 +66,7 @@
 
 pub mod action;
 pub mod commands;
+pub mod proxy;
 pub mod state;
 
 use std::collections::HashMap;
@@ -199,19 +209,13 @@ pub struct PolicyInfo {
     pub builtins: Placement,
     /// `"on"`, or `"off: <reason>"`.
     pub agent_widgets: String,
-}
-
-impl From<Policy> for PolicyInfo {
-    fn from(policy: Policy) -> Self {
-        Self {
-            widget_webview: policy.widget_webview,
-            builtins: policy.builtins,
-            agent_widgets: match policy.agent_widgets {
-                Switch::On => "on".to_owned(),
-                Switch::Off(reason) => format!("off: {reason}"),
-            },
-        }
-    }
+    /// Whether this machine could run agent-made widgets if the switch were on: `"eligible"`,
+    /// or `"ineligible: <reason>"`. Only a widgets webview behind the deny-all proxy is, and
+    /// never on macOS ([`proxy::eligibility_for`]).
+    pub agent_widgets_eligibility: String,
+    /// What the deny-all proxy leaves open on this OS, for the "Custom HTML widgets" setting
+    /// to explain itself: `"dns-prefetch-leak"` on macOS ([`proxy::Residual`]), or null.
+    pub residual: Option<proxy::Residual>,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -224,6 +228,9 @@ pub enum RegisterError {
     BuiltinsInMain,
     /// Agent-made and user-made widgets are off on this OS.
     AgentWidgetsOff(&'static str),
+    /// The switch is on, but this machine has no running deny-all proxy (macOS 13 or older,
+    /// an unknown macOS version, or a proxy that couldn't start).
+    NotEligible(String),
     /// This ID and version are already registered: a document is never replaced.
     AlreadyRegistered,
     /// A built-in uses an HTML sink (see [`BUILTIN_HTML_SINKS`]).
@@ -238,6 +245,10 @@ impl fmt::Display for RegisterError {
             Self::NoWidgetWebview => write!(f, "this OS has no widget webview in v0"),
             Self::BuiltinsInMain => write!(f, "built-ins render in main on this OS"),
             Self::AgentWidgetsOff(reason) => write!(f, "agent-made widgets are {reason}"),
+            Self::NotEligible(reason) => write!(
+                f,
+                "agent-made widgets run only behind the widgets webview's deny-all proxy: {reason}"
+            ),
             Self::AlreadyRegistered => {
                 write!(f, "that widget id and version are already registered")
             }
@@ -260,10 +271,12 @@ pub(crate) fn valid_id(id: &str) -> bool {
             .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
 }
 
-/// HTML sinks a built-in may not use while WebKit's preconnect still ignores CSP: a built-in
+/// HTML sinks a built-in may not use, since WebKit's preconnect ignores CSP: a built-in
 /// renders connector text (Slack, email), and markup parsed from that text could reach the
-/// network through a `<link>`. Built-ins set text with `textContent` only. Lift this once
-/// the widgets webview has a deny-all network proxy.
+/// network through a `<link>`. Built-ins set text with `textContent` only. Keep this while
+/// any OS renders built-ins without the deny-all proxy ([`proxy`]): macOS 11-13 does, and on
+/// macOS 14+ WebKit's DNS prefetch gets past it ([`proxy::Residual`]). Main's React has the same
+/// rule, by lint (`.oxlintrc.json`).
 pub const BUILTIN_HTML_SINKS: &[&str] = &[
     "innerHTML",
     "outerHTML",
@@ -273,12 +286,15 @@ pub const BUILTIN_HTML_SINKS: &[&str] = &[
     "createContextualFragment",
     "srcdoc",
     "setHTMLUnsafe",
+    "parseHTMLUnsafe",
 ];
 
 /// The widget documents the core serves, keyed by `<id>/<version>`, and the launch's host
 /// token (see [`action`]).
 pub struct Registry {
     policy: Policy,
+    /// This machine's OS, for the deny-all proxy's eligibility check.
+    os: proxy::Os,
     docs: Mutex<HashMap<String, (Source, String)>>,
     host_token: String,
 }
@@ -304,8 +320,14 @@ impl Default for Registry {
 
 impl Registry {
     pub fn new(policy: Policy) -> Self {
+        Self::on_os(policy, proxy::os())
+    }
+
+    /// A registry that judges eligibility as if on `os` (tests use other OS rows).
+    pub fn on_os(policy: Policy, os: proxy::Os) -> Self {
         Self {
             policy,
+            os,
             docs: Mutex::new(HashMap::new()),
             host_token: new_host_token(),
         }
@@ -315,6 +337,29 @@ impl Registry {
         self.policy
     }
 
+    /// The policy as the UI sees it.
+    pub fn info(&self) -> PolicyInfo {
+        let policy = self.policy;
+        let eligibility = if policy.widget_webview {
+            proxy::eligibility(self.os)
+        } else {
+            Err("this OS has no widget webview in v0".to_owned())
+        };
+        PolicyInfo {
+            widget_webview: policy.widget_webview,
+            builtins: policy.builtins,
+            agent_widgets: match policy.agent_widgets {
+                Switch::On => "on".to_owned(),
+                Switch::Off(reason) => format!("off: {reason}"),
+            },
+            residual: proxy::residual_for(self.os),
+            agent_widgets_eligibility: match eligibility {
+                Ok(()) => "eligible".to_owned(),
+                Err(reason) => format!("ineligible: {reason}"),
+            },
+        }
+    }
+
     /// The token the host page must send with every action. Only `host_call` passes it on.
     pub(crate) fn host_token(&self) -> &str {
         &self.host_token
@@ -322,7 +367,8 @@ impl Registry {
 
     /// Registers a widget document and returns the URL it mounts from, if the policy allows:
     /// nothing registers without a widget webview, built-ins only where they render in it,
-    /// and agent/user widgets only with the switch on.
+    /// and agent/user widgets only with the switch on and on a machine with the running
+    /// deny-all proxy ([`proxy::ensure_eligible`], which starts it).
     pub fn register(
         &self,
         source: Source,
@@ -337,6 +383,9 @@ impl Registry {
             (Source::Builtin, Placement::Main, _) => return Err(RegisterError::BuiltinsInMain),
             (Source::Agent | Source::User, _, Switch::Off(reason)) => {
                 return Err(RegisterError::AgentWidgetsOff(reason));
+            }
+            (Source::Agent | Source::User, _, Switch::On) => {
+                proxy::ensure_eligible(self.os).map_err(RegisterError::NotEligible)?;
             }
             _ => {}
         }
@@ -546,8 +595,8 @@ fn with_preamble(html: &str) -> String {
 /// WebKit opens a connection for `<link rel=preconnect>` (and dns-prefetch, prefetch,
 /// preload) despite the widget CSP, which the isolation probe found. A widget is one
 /// self-contained file with inline JS and CSS (§5.1), so it has no use for `<link>` at all.
-/// This is defence in depth only: script can still build a link at run time, which only a
-/// deny-all network proxy for the widgets webview stops.
+/// This is defence in depth only: script can still build a link at run time, which only the
+/// deny-all proxy ([`proxy`]) stops, where the OS has one.
 pub fn inert_links(html: &str) -> String {
     let lower = html.to_ascii_lowercase();
     let mut out = String::with_capacity(html.len() + 16);
@@ -596,8 +645,14 @@ pub fn host_call(function: HostFn, args: &[Value]) -> String {
 }
 
 /// The `widgets` webview may stay on the widget scheme and nothing else (§5.3). wry asks this
-/// for every navigation on macOS, but only for top-level ones on Windows; there the host CSP's
-/// frame-src is what keeps a frame on the scheme.
+/// for every navigation on macOS, but only for top-level ones on Windows. WebView2's
+/// `FrameNavigationStarting` isn't wired (it needs `unsafe` COM code, which this crate
+/// forbids; descoped): on Windows the deny-all proxy meets that precondition. The host CSP's
+/// frame-src stops a frame's navigation off the scheme before any request, and a navigation
+/// GET that does go out reaches only the deny-all proxy. The probe's Windows run shows both
+/// (frame-src violations, the fixture's ack, 0 at its listener; the host page's navigate GET
+/// in the proxy's log), and its "can't navigate off the widget scheme" check fails CI if
+/// either slips.
 pub fn allow_navigation(url: &Url) -> bool {
     if matches!(url.as_str(), "about:blank" | "about:srcdoc") {
         return true;
@@ -619,6 +674,9 @@ pub struct Bounds {
 pub enum AttachError {
     /// The policy says this OS has no widget webview.
     NotOnThisOs,
+    /// This OS has a per-webview proxy, but the deny-all proxy couldn't start. The widgets
+    /// webview never runs without it there.
+    Proxy(String),
     Tauri(tauri::Error),
 }
 
@@ -626,6 +684,7 @@ impl fmt::Display for AttachError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::NotOnThisOs => write!(f, "this OS has no widget webview in v0"),
+            Self::Proxy(error) => write!(f, "the widgets webview's deny-all proxy: {error}"),
             Self::Tauri(error) => write!(f, "{error}"),
         }
     }
@@ -664,21 +723,10 @@ fn add_widgets_webview<R: Runtime>(
 ) -> Result<Webview<R>, AttachError> {
     use tauri::Manager;
     let url = Url::parse(&format!("{SCHEME}://localhost/host/")).expect("static URL parses");
-    let mut builder = WebviewBuilder::new(LABEL, WebviewUrl::CustomProtocol(url));
-    // WebView2 shares one browser process per user-data folder, and refuses a second
-    // environment with other options (0x8007139F). So the widgets webview takes the main
-    // window's browser arguments, if the config sets any. Other webviews ignore them.
-    let main_args = window
-        .app_handle()
-        .config()
-        .app
-        .windows
-        .iter()
-        .find(|w| w.label == "main")
-        .and_then(|w| w.additional_browser_args.clone());
-    if let Some(args) = main_args {
-        builder = builder.additional_browser_args(&args);
-    }
+    let builder = isolate_network(
+        window,
+        WebviewBuilder::new(LABEL, WebviewUrl::CustomProtocol(url)),
+    )?;
     let builder = builder
         .on_navigation(|url| {
             let allowed = allow_navigation(url);
@@ -686,8 +734,13 @@ fn add_widgets_webview<R: Runtime>(
             crate::e2e::record_navigation(url.as_str(), allowed);
             allowed
         })
-        .on_new_window(|_, _| tauri::webview::NewWindowResponse::Deny)
-        .initialization_script_for_all_frames(FRAMES_JS)
+        .on_new_window(|_, _| tauri::webview::NewWindowResponse::Deny);
+    let builder = if removes_webrtc() {
+        builder.initialization_script_for_all_frames(FRAMES_JS)
+    } else {
+        builder
+    };
+    let builder = builder
         // Every page load of the host page: replay the grid and the data ([`state`]).
         .on_page_load(|webview, payload| {
             let state = webview.state::<state::HostState>();
@@ -709,6 +762,90 @@ fn add_widgets_webview<R: Runtime>(
             LogicalSize::new(bounds.width, bounds.height),
         )
         .map_err(AttachError::Tauri)
+}
+
+/// Whether frames.js removes WebRTC from the widgets webview: always, except in the probe's
+/// WebRTC-kept mode (test builds only), which checks what the network setup alone does.
+fn removes_webrtc() -> bool {
+    #[cfg(feature = "e2e")]
+    return !crate::e2e::keeps_webrtc();
+    #[cfg(not(feature = "e2e"))]
+    true
+}
+
+/// How the widgets webview's network is set up on an OS ([`isolation`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Isolation {
+    /// A non-persistent data store (macOS) or an ephemeral web context (Linux) of its own,
+    /// never main's. Nothing a widget stores outlives the app.
+    pub incognito: bool,
+    pub route: Route,
+}
+
+/// Where the widgets webview's traffic goes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Route {
+    /// No per-webview proxy on this OS, and why (macOS 13 or older, or an unknown version).
+    /// Agent-made widgets are never eligible there.
+    Direct(&'static str),
+    /// The deny-all proxy, on its own data store or web context (macOS 14+, Linux).
+    Proxy(Url),
+    /// Its own WebView2 environment (Windows): a user-data folder of its own under the app's
+    /// local data folder, and browser arguments that carry the deny-all proxy.
+    WebView2 {
+        data_dir: &'static str,
+        args: String,
+    },
+}
+
+/// The widgets webview's network on `os`, given the deny-all proxy's `port` (unused where the
+/// OS has no proxy).
+pub fn isolation(os: proxy::Os, port: u16) -> Isolation {
+    let route = match (proxy::support_for(os), os) {
+        (proxy::Support::Unavailable(reason), _) => Route::Direct(reason),
+        (proxy::Support::DenyAll, proxy::Os::Windows) => Route::WebView2 {
+            data_dir: proxy::WEBVIEW2_DATA_DIR,
+            args: proxy::webview2_args(port),
+        },
+        (proxy::Support::DenyAll, _) => Route::Proxy(proxy::url(port)),
+    };
+    Isolation {
+        incognito: true,
+        route,
+    }
+}
+
+/// Applies [`isolation`] for this machine. Where this OS has a per-webview proxy and it
+/// can't start, there is no widgets webview.
+fn isolate_network<R: Runtime>(
+    window: &Window<R>,
+    builder: WebviewBuilder<R>,
+) -> Result<WebviewBuilder<R>, AttachError> {
+    let os = proxy::os();
+    let port = match proxy::support_for(os) {
+        proxy::Support::DenyAll => proxy::deny_all().map_err(AttachError::Proxy)?,
+        proxy::Support::Unavailable(_) => 0,
+    };
+    let Isolation { incognito, route } = isolation(os, port);
+    let builder = builder.incognito(incognito);
+    match route {
+        Route::Direct(reason) => {
+            eprintln!("widgets: no deny-all proxy here ({reason}); built-ins only");
+            Ok(builder)
+        }
+        Route::Proxy(url) => Ok(builder.proxy_url(url)),
+        Route::WebView2 { data_dir, args } => {
+            use tauri::Manager;
+            // wry adds no proxy of its own when browser arguments are given, so they carry it.
+            let dir = window
+                .app_handle()
+                .path()
+                .app_local_data_dir()
+                .map_err(AttachError::Tauri)?
+                .join(data_dir);
+            Ok(builder.data_directory(dir).additional_browser_args(&args))
+        }
+    }
 }
 
 #[cfg(test)]
@@ -736,6 +873,8 @@ mod tests {
         builtins: Placement::Main,
         agent_widgets: Switch::Off("no widget webview"),
     };
+    /// An eligible machine: Windows, behind the deny-all proxy.
+    const ELIGIBLE: proxy::Os = proxy::Os::Windows;
 
     fn get(path: &str) -> Request<Vec<u8>> {
         Request::builder()
@@ -760,8 +899,94 @@ mod tests {
             Placement::Main
         };
         assert_eq!(policy.builtins, builtins);
-        let info = PolicyInfo::from(policy);
+        let info = Registry::new(policy).info();
         assert!(info.agent_widgets.starts_with("off: "));
+        if cfg!(target_os = "macos") {
+            // No Mac is eligible while WebKit's DNS prefetch leaks (the owner's decision).
+            assert!(info.agent_widgets_eligibility.starts_with("ineligible: "));
+            assert_eq!(info.residual, Some(proxy::Residual::DnsPrefetchLeak));
+        } else {
+            assert_eq!(
+                info.agent_widgets_eligibility,
+                "ineligible: this OS has no widget webview in v0"
+            );
+            assert_eq!(info.residual, None);
+        }
+    }
+
+    /// The switch alone never turns agent-made widgets on. No Mac is eligible (WebKit's DNS
+    /// prefetch leaks names outside the proxy, and macOS 13 or older has no proxy; 10.x is
+    /// SYSTEM_VERSION_COMPAT), so nothing agent-made registers there. Windows is, behind the
+    /// running proxy.
+    #[test]
+    fn agent_widgets_need_an_eligible_machine_with_the_running_proxy() {
+        use proxy::Os;
+        let macs = [
+            Os::MacOs(Some(13)),
+            Os::MacOs(Some(10)),
+            Os::MacOs(None),
+            Os::MacOs(Some(14)),
+            Os::MacOs(Some(26)),
+            Os::MacOs(Some(27)),
+        ];
+        for os in macs {
+            let registry = Registry::on_os(ON, os);
+            for source in [Source::Agent, Source::User] {
+                assert!(
+                    matches!(
+                        registry.register(source, "w", 1, "<p>x</p>"),
+                        Err(RegisterError::NotEligible(_))
+                    ),
+                    "{os:?} {source:?}"
+                );
+            }
+            assert!(!registry.contains("w", 1));
+            // Built-ins still render there, with textContent only.
+            assert!(
+                registry
+                    .register(Source::Builtin, "b", 1, "<p>x</p>")
+                    .is_ok()
+            );
+            let info = registry.info();
+            assert!(
+                info.agent_widgets_eligibility.starts_with("ineligible: "),
+                "{os:?}"
+            );
+            assert_eq!(info.residual, Some(proxy::Residual::DnsPrefetchLeak));
+        }
+        assert!(
+            Registry::on_os(ON, Os::MacOs(Some(14)))
+                .info()
+                .agent_widgets_eligibility
+                .contains("dns-prefetch")
+        );
+        // Linux has the proxy in code, unmeasured: not eligible either.
+        let linux = Registry::on_os(ON, Os::Linux);
+        assert!(matches!(
+            linux.register(Source::Agent, "w", 1, "<p>x</p>"),
+            Err(RegisterError::NotEligible(_))
+        ));
+        assert!(
+            linux
+                .info()
+                .agent_widgets_eligibility
+                .starts_with("ineligible: ")
+        );
+        assert_eq!(linux.info().residual, None);
+        let windows = Registry::on_os(ON, Os::Windows);
+        assert!(windows.register(Source::Agent, "w", 1, "<p>x</p>").is_ok());
+        assert!(proxy::running().is_some(), "registering started the proxy");
+        let info = windows.info();
+        assert_eq!(info.agent_widgets_eligibility, "eligible");
+        assert_eq!(info.residual, None);
+        let json = serde_json::to_value(Registry::on_os(ON, Os::MacOs(Some(14))).info()).unwrap();
+        assert_eq!(json["residual"], "dns-prefetch-leak");
+        assert!(
+            json["agentWidgetsEligibility"]
+                .as_str()
+                .unwrap()
+                .starts_with("ineligible: ")
+        );
     }
 
     #[test]
@@ -806,7 +1031,7 @@ mod tests {
                 .register(Source::Builtin, "w", 1, "<p>x</p>")
                 .is_ok()
         );
-        let on = Registry::new(ON);
+        let on = Registry::on_os(ON, ELIGIBLE);
         assert!(on.register(Source::Agent, "w", 1, "<p>x</p>").is_ok());
     }
 
@@ -833,7 +1058,7 @@ mod tests {
 
     #[test]
     fn rejects_bad_ids_and_oversized_documents() {
-        let registry = Registry::new(ON);
+        let registry = Registry::on_os(ON, ELIGIBLE);
         for id in ["", "../x", "a/b", "a b", &"x".repeat(65)] {
             assert_eq!(
                 registry.register(Source::Builtin, id, 1, ""),
@@ -850,7 +1075,7 @@ mod tests {
 
     #[test]
     fn serves_widgets_with_the_csp_header_then_meta_then_the_sdk() {
-        let registry = Registry::new(ON);
+        let registry = Registry::on_os(ON, ELIGIBLE);
         let url = registry
             .register(Source::Builtin, "clock", 2, "<p>hi</p>")
             .unwrap();
@@ -896,7 +1121,7 @@ mod tests {
             "text is untouched"
         );
 
-        let registry = Registry::new(ON);
+        let registry = Registry::on_os(ON, ELIGIBLE);
         registry
             .register(
                 Source::Builtin,
@@ -921,7 +1146,7 @@ mod tests {
 
     #[test]
     fn serves_only_the_widgets_webview() {
-        let registry = Registry::new(ON);
+        let registry = Registry::on_os(ON, ELIGIBLE);
         registry
             .register(Source::Builtin, "clock", 1, "<p>hi</p>")
             .unwrap();
@@ -947,7 +1172,7 @@ mod tests {
 
     #[test]
     fn serves_the_host_page_with_the_host_csp() {
-        let registry = Registry::new(ON);
+        let registry = Registry::on_os(ON, ELIGIBLE);
         let (page, _) = respond(&registry, None, LABEL, &get("/host/"));
         assert_eq!(page.status(), StatusCode::OK);
         assert_eq!(page.headers()[header::CONTENT_SECURITY_POLICY], HOST_CSP);
@@ -968,7 +1193,7 @@ mod tests {
 
     #[test]
     fn the_action_route_takes_actions_only_from_the_host_page_top_frame() {
-        let registry = Registry::new(ON);
+        let registry = Registry::on_os(ON, ELIGIBLE);
         registry
             .register(Source::Builtin, "clock", 1, "<p>clock</p>")
             .unwrap();
@@ -989,7 +1214,7 @@ mod tests {
         assert_eq!(token.len(), 32);
         assert_ne!(
             token,
-            Registry::new(ON).host_token(),
+            Registry::on_os(ON, ELIGIBLE).host_token(),
             "one token per launch"
         );
 
@@ -1030,7 +1255,7 @@ mod tests {
 
     #[test]
     fn a_registered_document_is_never_replaced_and_keeps_its_source() {
-        let registry = Registry::new(ON);
+        let registry = Registry::on_os(ON, ELIGIBLE);
         registry
             .register(Source::Builtin, "clock", 1, "<p>a</p>")
             .unwrap();
@@ -1054,7 +1279,7 @@ mod tests {
 
     #[test]
     fn the_id_host_is_reserved() {
-        let registry = Registry::new(ON);
+        let registry = Registry::on_os(ON, ELIGIBLE);
         assert_eq!(
             registry.register(Source::Builtin, "host", 1, "<p>x</p>"),
             Err(RegisterError::BadId)
@@ -1063,7 +1288,7 @@ mod tests {
 
     #[test]
     fn built_ins_may_not_use_html_sinks_while_preconnect_is_open() {
-        let registry = Registry::new(ON);
+        let registry = Registry::on_os(ON, ELIGIBLE);
         for sink in BUILTIN_HTML_SINKS {
             let html = format!("<script>el.{sink} = text</script>");
             assert_eq!(
@@ -1139,5 +1364,71 @@ mod tests {
         for url in blocked {
             assert!(!allow_navigation(&Url::parse(url).unwrap()), "{url}");
         }
+    }
+
+    /// The widgets webview's own network, on every row of the matrix: its own
+    /// incognito store or context everywhere, the deny-all proxy where the OS has one, and on
+    /// Windows its own WebView2 folder and arguments.
+    #[test]
+    fn the_widgets_webview_gets_its_own_network() {
+        use proxy::Os;
+        let all = [
+            Os::MacOs(Some(14)),
+            Os::MacOs(Some(26)),
+            Os::MacOs(Some(13)),
+            Os::MacOs(None),
+            Os::Windows,
+            Os::Linux,
+        ];
+        for os in all {
+            assert!(isolation(os, 4321).incognito, "{os:?}");
+        }
+        for os in [Os::MacOs(Some(14)), Os::MacOs(Some(26)), Os::Linux] {
+            assert_eq!(
+                isolation(os, 4321).route,
+                Route::Proxy(proxy::url(4321)),
+                "{os:?}"
+            );
+        }
+        for os in [Os::MacOs(Some(13)), Os::MacOs(None)] {
+            assert!(
+                matches!(isolation(os, 4321).route, Route::Direct(_)),
+                "{os:?}"
+            );
+        }
+        let Route::WebView2 { data_dir, args } = isolation(Os::Windows, 4321).route else {
+            panic!("Windows gets its own WebView2 environment");
+        };
+        assert_eq!(data_dir, "widgets-webview2");
+        // Tauri's default WebView2 folder, main's, is EBWebView.
+        assert_ne!(data_dir, "EBWebView");
+        assert_eq!(args, proxy::webview2_args(4321));
+    }
+
+    /// Main's networking is unchanged by the widgets' proxy: no config gives main a proxy, an
+    /// ephemeral store or its own WebView2 folder, so it keeps the default store, context and
+    /// environment, which the widgets webview never uses (see `isolate_network`).
+    #[test]
+    fn main_keeps_its_own_network() {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        for file in ["tauri.conf.json", "tauri.e2e.conf.json"] {
+            let config = json_file(&dir.join(file));
+            let windows = config["app"]["windows"].as_array().unwrap();
+            assert!(windows.iter().any(|w| w["label"] == "main"), "{file}");
+            for window in windows {
+                for key in [
+                    "proxyUrl",
+                    "incognito",
+                    "dataDirectory",
+                    "dataStoreIdentifier",
+                ] {
+                    assert!(window.get(key).is_none(), "{file}: {key}");
+                }
+                let args = window["additionalBrowserArgs"].as_str().unwrap_or_default();
+                assert!(!args.contains("proxy"), "{file}: {args}");
+            }
+        }
+        // Tauri's default WebView2 folder for main is EBWebView.
+        assert_ne!(proxy::WEBVIEW2_DATA_DIR, "EBWebView");
     }
 }

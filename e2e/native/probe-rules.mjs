@@ -10,6 +10,30 @@
 /** The fixture's navigation step's request paths: any hit is a frame leaving the scheme. */
 const FRAME_NAVIGATION = new Set(["navigate", "ping-target", "meta-refresh", "top-navigation", "window-open", "form"]);
 
+/**
+ * Reach targets (src-tauri/src/e2e/reach.rs) that go past the deny-all proxy on macOS 14+:
+ * this Mac (loopback, `localhost`, and on macOS 27.2 its own LAN address, which went to the
+ * proxy on 26.7.2) and link-local IPv4. Measured and recorded
+ * (src-tauri/src/widget_host/proxy.rs); every other target is a gate on macOS too.
+ */
+const MACOS_RESIDUAL = new Set(["loopback-v4", "localhost", "loopback-v6", "own-lan-address", "link-local-v4"]);
+const RESIDUAL = "macOS local-network residual (measured)";
+
+/**
+ * A gate that fails for a reason the owner has recorded in the policy (`residual:
+ * "dns-prefetch-leak"`, macOS): WebKit resolves `dns-prefetch` names outside the proxy, which
+ * is why no Mac is eligible. It stays a gate (⛔, it keeps the OS off), but doesn't fail a
+ * strict run; every other gate still does. Without that residual in the policy, a lookup is
+ * an ordinary gate failure.
+ */
+const MACOS_DNS_PREFETCH = "the known reason macOS isn't eligible: WebKit resolves dns-prefetch names outside the proxy";
+
+/** The probe's sides that sit behind the proxy, as reach.rs names them, with their labels. */
+const SIDES = [
+  ["widgets-host", "host page"],
+  ["widget-iframe", "widget iframe"],
+];
+
 /** Tauri's message when it drops an IPC message with the wrong key (tauri webview/mod.rs). */
 const KEY_DROP = /__TAURI_INVOKE_KEY__ expected (\S+) but received (\S+)/;
 
@@ -40,7 +64,7 @@ export function evaluate(report, { stderr = "" } = {}) {
   const agentOn = String(report?.policy?.agentWidgets ?? "") === "on";
   const strict = process.env.RLX_PROBE_STRICT === "1";
   for (const c of checks) {
-    if (c.gate && !c.ok) c.blocking = agentOn || strict;
+    if (c.gate && !c.ok) c.blocking = agentOn || (strict && !c.known);
     else if (!c.ok) c.blocking = true;
   }
   return checks;
@@ -52,6 +76,10 @@ export function agentVerdict(checks) {
     return { mayTurnOn: false, why: "this OS has no widget webview in v0", noWebview: true };
   }
   const failing = checks.filter((c) => !c.ok);
+  const ineligible = checks.find((c) => c.ineligible);
+  if (ineligible) {
+    return { mayTurnOn: false, ineligible: true, why: [ineligible.detail, ...failing.map((c) => c.id)].join("; ") };
+  }
   return failing.length === 0
     ? { mayTurnOn: true, why: "every check passed" }
     : { mayTurnOn: false, why: failing.map((c) => c.id).join("; ") };
@@ -71,7 +99,7 @@ function evaluateChecks(report, stderr) {
   // as "must stay off" and the run continues.
   const gate = (id, ok, detail) => checks.push({ id, ok: Boolean(ok), gate: true, detail });
 
-  if (!report || report.schema !== 3) {
+  if (!report || report.schema !== 5) {
     check("report", false, "no report, or an unknown schema");
     return checks;
   }
@@ -113,26 +141,66 @@ function evaluateChecks(report, stderr) {
     );
   }
 
-  // Connections. Each side has its own listener; a hit is classified by what it carried.
+  // Connections. Each side has its own listener; a hit is classified by what it carried. In
+  // the WebRTC-kept run (frames.js skipped) WebRTC's hits are recorded, not gated: no proxy
+  // governs WebRTC, so frames.js is its barrier, and that run measures what gets past.
+  const webrtcKept = String(report.webrtc ?? "").startsWith("kept");
   for (const side of ["host", "iframe"]) {
     if (!probed) break;
     const hits = (listeners[side]?.hits ?? []).map(classifyHit);
-    const contract = hits.filter((h) => h.vector !== "preconnect");
+    const rtcHits = hits.filter((h) => h.vector === "rtc");
+    const contract = hits.filter((h) => h.vector !== "preconnect" && !(webrtcKept && h.vector === "rtc"));
     const silent = hits.filter((h) => h.vector === "preconnect");
     const label = side === "host" ? "host page" : "widget iframe";
     // On a webview only the probe attached (the product attaches none on this OS), a leak
     // can't reach a user: it keeps the widget webview and agent-made widgets off here.
     (policy.widgetWebview ? check : gate)(
-      `${label}: 0 connections (fetch, XHR, WebSocket, EventSource, beacon, img, CSS, fonts, SVG, prefetch, preload, ping, WebRTC, navigation, refresh)`,
+      `${label}: 0 connections (fetch, XHR, WebSocket, EventSource, beacon, keepalive fetch, pagehide beacon, img, CSS, fonts, SVG, prefetch, preload, ping, WebRTC, navigation, refresh)`,
       contract.length === 0,
       (contract.length === 0 ? "0 connections, 0 datagrams" : summarizeHits(contract)) +
         (policy.widgetWebview ? "" : " (probe-only webview: the product attaches none on this OS)"),
     );
-    gate(
-      `${label}: 0 preconnect/dns-prefetch connections`,
-      silent.length === 0,
-      silent.length === 0 ? "0 connections" : `${silent.length} TCP connection(s) that sent nothing: ${summarizeHits(silent)}`,
+    if (webrtcKept) {
+      info(
+        `${label}: WebRTC with frames.js skipped (recorded)`,
+        rtcHits.length === 0
+          ? "0 STUN/TURN hits"
+          : `${summarizeHits(rtcHits)}: WebRTC's UDP gets past the proxy, so frames.js is its only barrier`,
+      );
+    }
+    const silentDetail = silent.length === 0 ? "0 connections" : `${silent.length} TCP connection(s) that sent nothing: ${summarizeHits(silent)}`;
+    if (report.os === "macos") {
+      // The macOS local-network residual: Network.framework never proxies loopback, so a
+      // preconnect can still open a connection to a port on this Mac. The reach rows below
+      // gate every other destination there.
+      checks.push({
+        id: `${label}: loopback preconnect (${RESIDUAL})`,
+        ok: true,
+        info: true,
+        residual: true,
+        detail: `${silentDetail}. macOS never proxies loopback (src-tauri/src/widget_host/proxy.rs)`,
+      });
+    } else {
+      gate(`${label}: 0 preconnect connections`, silent.length === 0, silentDetail);
+    }
+  }
+  // The deny-all proxy (src-tauri/src/widget_host/proxy.rs). Where this OS has a per-webview
+  // proxy, a widgets webview without it is a bug. Where it has none (macOS 11-13), agent-made
+  // widgets must stay off there.
+  if (probed) {
+    const proxy = report.proxy ?? {};
+    const support = String(proxy.support ?? "not reported");
+    const behind = support === "deny-all" && Number.isInteger(proxy.port);
+    (support === "deny-all" ? check : gate)(
+      "widgets webview runs behind the deny-all proxy",
+      behind,
+      behind
+        ? `127.0.0.1:${proxy.port}, refused ${proxy.refused ?? 0} connection(s)`
+        : support === "deny-all"
+          ? "this OS has the proxy, but it isn't running"
+          : support,
     );
+    reachChecks(report, checks, { check, gate, info });
   }
   // Frame navigation off the widget scheme is held by the host CSP's frame-src, and on
   // Windows by nothing else (wry asks the guard about top-level navigations only). So a hit
@@ -148,7 +216,27 @@ function evaluateChecks(report, stderr) {
   }
   const controlHits = listeners.control?.hits ?? [];
   info("listener control (main WebRTC)", `${main.rtc ?? "not run"}; control listener saw ${controlHits.length}`);
+  // Positive control for main's rows: main's preconnect works at all (CSP doesn't govern
+  // it), so it reaches the control listener. Loopback can't show main is off the proxy on
+  // macOS, which never proxies loopback; main's off-machine row (reachChecks) does.
+  const mainPreconnects = controlHits.map(classifyHit).filter((h) => h.vector === "preconnect").length;
+  const mainControl = "main's preconnect works (positive control: it reaches the control listener)";
+  const mainDetail = `${mainPreconnects} preconnect connection(s); main ${main.preconnect ?? "added none"}`;
+  if (probed) check(mainControl, mainPreconnects >= 1, mainDetail);
+  else info(mainControl, `${mainDetail} (no widgets webview, so no proxy here)`);
   check("main CSP blocks frames", String(main.frameSrc ?? "").startsWith("blocked"), String(main.frameSrc));
+
+  // Where the policy records a residual (macOS: the DNS-prefetch leak), this OS isn't
+  // eligible, whatever the probe shows.
+  if (policy.residual) {
+    checks.push({
+      id: "agent-made widgets eligibility (policy)",
+      ok: true,
+      info: true,
+      ineligible: true,
+      detail: `${policy.agentWidgetsEligibility ?? "ineligible"} (residual: ${policy.residual})`,
+    });
+  }
 
   // The per-OS switch, through the product API.
   const agentRegister = String(report.switch?.agentRegister ?? "");
@@ -272,6 +360,19 @@ function evaluateChecks(report, stderr) {
     info("widget iframe: connection attempts", (frame.connections ?? []).map((c) => `${c.kind} ${c.outcome}`).join("; "));
   }
 
+  // The WebRTC-kept run (RLXAPP_E2E_RTC=kept): frames.js is skipped, so the connection rows
+  // above show what the network setup alone does with WebRTC. It must have run in both
+  // frames, or "0 connections" proves nothing.
+  if (webrtcKept) {
+    const rtcRun = (list) => (list ?? []).find((c) => c.kind === "rtc")?.outcome ?? "not run";
+    const runs = [rtcRun(host.connections), rtcRun(host.iframe?.connections)];
+    check(
+      "WebRTC kept for the probe: it ran in both frames (positive control)",
+      runs.every((outcome) => String(outcome).startsWith("gathering")),
+      `host page: ${runs[0]}; widget iframe: ${runs[1]}`,
+    );
+  }
+
   const navigations = report.navigations ?? [];
   info(
     "navigations the guard was asked about",
@@ -355,6 +456,282 @@ export function classifyHit(hit) {
   return { at: Number(at), what, vector };
 }
 
+/**
+ * `host:port`, lowercase, with IPv6 brackets dropped: Network.framework writes
+ * `CONNECT fe80::77:41014`, Chromium `CONNECT [fe80::77]:41014`.
+ */
+export function authorityKey(authority) {
+  const text = String(authority).trim().toLowerCase();
+  const bracketed = /^\[([^\]]+)\]:(\d+)$/.exec(text);
+  return bracketed ? `${bracketed[1]}:${bracketed[2]}` : text;
+}
+
+/**
+ * The deny-all proxy's test-build log (`"<ms> <first line>"`, src-tauri/src/widget_host/proxy.rs):
+ * the authorities it was asked for (a CONNECT, or an absolute-form request), and the times of
+ * its untagged connections, which sent nothing (Chromium's preconnect of an http URL through
+ * a proxy opens a connection to the proxy and sends nothing).
+ */
+export function readProxyLog(log = []) {
+  const named = new Map();
+  const untagged = [];
+  for (const line of log) {
+    const [atText, ...rest] = String(line).split(" ");
+    const at = Number(atText);
+    const what = rest.join(" ");
+    const connect = /^CONNECT (\S+) HTTP\//.exec(what);
+    const absolute = /^[A-Z]+ (https?):\/\/([^/\s]+)\S* HTTP\//.exec(what);
+    let key = null;
+    if (connect) key = authorityKey(connect[1]);
+    else if (absolute) key = authorityKey(/:\d+$/.test(absolute[2]) ? absolute[2] : `${absolute[2]}:${absolute[1] === "https" ? 443 : 80}`);
+    if (key) named.set(key, [...(named.get(key) ?? []), at]);
+    else if (what === "no data") untagged.push(at);
+  }
+  return { named, untagged };
+}
+
+/** A reach listener's hit, `"<ms> tcp@<address> <what>"`, as { at, address, what }. */
+function readReachHit(hit) {
+  const match = /^(\d+) tcp@(\S+) (.*)$/.exec(String(hit));
+  return match ? { at: Number(match[1]), address: match[2], what: match[3] } : { at: NaN, address: "?", what: String(hit) };
+}
+
+/**
+ * Each direct hit at a side's reach listener, given to the on-host attempt that could have
+ * sent it: an http preconnect sends nothing (a plain connection), an https one a ClientHello
+ * whose SNI fits its host (none for an IP literal, `sni=<name>` for a name), and an IP
+ * literal is reached only at that address. A hit goes to the most recent such attempt up to
+ * 2 s before it, since a ClientHello can come a few hundred ms late (a slow name lookup).
+ * Returns a map from attempt to its hits.
+ */
+function directHits(tried, reachHits) {
+  const byAttempt = new Map();
+  for (const [side] of SIDES) {
+    const onHost = tried[side].filter((a) => a.class === "on-host" && a.rel === "preconnect");
+    for (const hit of reachHits[side]) {
+      const fits = onHost.filter((a) => a.at <= hit.at + 20 && hit.at - a.at < 2000 && hitFits(a, hit));
+      const attempt = fits.reduce((latest, a) => (latest === null || a.at > latest.at ? a : latest), null);
+      if (attempt) byAttempt.set(attempt, [...(byAttempt.get(attempt) ?? []), hit]);
+    }
+  }
+  return byAttempt;
+}
+
+function hitFits(attempt, hit) {
+  const host = String(attempt.host).replace(/^\[(.*)\]$/, "$1").toLowerCase();
+  const literal = /^[\d.]+$/.test(host) || host.includes(":");
+  if (literal && hit.address !== host) return false;
+  const tls = hit.what.startsWith("tls ClientHello");
+  if (attempt.scheme === "http") return !tls;
+  if (!tls) return false;
+  if (hit.what.includes("sni not in the first record")) return true;
+  return hit.what.endsWith(literal ? "no sni" : `sni=${host}`);
+}
+
+/** The DNS listener's queries, `"<ms> <type> <name>"` (src-tauri/src/e2e/dns.rs). */
+function readQueries(dns) {
+  return (dns?.queries ?? []).map((line) => {
+    const [at, type, name] = String(line).split(" ");
+    return { at: Number(at), type, name: String(name ?? "").toLowerCase() };
+  });
+}
+
+function dnsQueries(n) {
+  return `${n} DNS quer${n === 1 ? "y" : "ies"}`;
+}
+
+/**
+ * The reach rows (src-tauri/src/e2e/reach.rs): one per (side, target), each over http and
+ * https. A target reaches only the proxy when the proxy's log names its authority (or, for an
+ * http preconnect through Chromium's proxy, an untagged proxy connection lines up with it in
+ * time) and nothing past the proxy saw it: the side's reach listener, for this host's own
+ * addresses, and the DNS listener, for the probe's zone. On Windows a pair nothing saw at all
+ * also passes, given the netstat witness. On macOS the local-network residual is recorded as
+ * info, and the dns-prefetch lookups are a known gate failure; every other pair is a gate.
+ * Main's own targets must never reach the proxy, and its zone name is the DNS route's
+ * positive control.
+ */
+function reachChecks(report, checks, { check, gate, info }) {
+  const macos = report.os === "macos";
+  const plans = report.reach?.plans ?? {};
+  const listeners = report.listeners ?? {};
+  const proxyLog = readProxyLog(report.proxy?.log ?? []);
+  const queries = readQueries(report.dns);
+  const dnsMeasured = Boolean(report.dns && !report.dns.error);
+  const tried = {
+    "widgets-host": report.host?.reach ?? [],
+    "widget-iframe": report.host?.iframe?.reach ?? [],
+    main: report.main?.reach ?? [],
+  };
+  const reachHits = {
+    "widgets-host": (listeners.reachHost?.hits ?? []).map(readReachHit),
+    "widget-iframe": (listeners.reachIframe?.hits ?? []).map(readReachHit),
+  };
+  const windows = report.os === "windows";
+  const residual = (id) => macos && MACOS_RESIDUAL.has(id);
+  const knownDnsPrefetch = report.policy?.residual === "dns-prefetch-leak";
+
+  // The netstat witness (Windows, from probe.mjs): TCP connection attempts off this host,
+  // matched by port, since every reach attempt off this host has a port of its own. Main's
+  // direct attempt to its own TEST-NET address is its positive control. With it, a pair
+  // that nothing saw at all (no CONNECT, no direct connection, no attempt, no lookup) went
+  // nowhere: WebView2 sends most of the widgets' preconnects nowhere behind the proxy.
+  const synSent = (report.netstat?.synSent ?? []).map((line) => {
+    const [at, remote] = String(line).split(" ");
+    return { at: Number(at), remote, port: Number(/:(\d+)$/.exec(String(remote))?.[1]) };
+  });
+  const mainTestNet = (plans.main ?? []).filter((a) => a.id === "test-net");
+  const witnessed = mainTestNet.filter((a) => synSent.some((s) => authorityKey(s.remote) === authorityKey(a.authority)));
+  const witness = !macos && witnessed.length > 0;
+  if (!macos && mainTestNet.length > 0) {
+    check(
+      "netstat witness: main's direct connection attempt to its TEST-NET address is seen (positive control)",
+      witness,
+      report.netstat
+        ? `${report.netstat.samples} samples, ${synSent.length} SYN_SENT endpoint(s); main's: ${witnessed.map((a) => a.authority).join(", ") || "none seen"}`
+        : "no netstat samples in the report",
+    );
+  }
+
+  // Untagged proxy connections go, in time order, to the http preconnects no log line names:
+  // first each to the one whose slot (until the next attempt, 250 ms on) it falls in, then
+  // any left over to one up to 2 s before it. The sides run one after the other.
+  const free = [...proxyLog.untagged].sort((a, b) => a - b);
+  const evidence = new Map();
+  const widgetAttempts = SIDES.flatMap(([side]) => tried[side].map((attempt) => ({ side, attempt }))).sort((a, b) => a.attempt.at - b.attempt.at);
+  const unnamed = [];
+  const directByAttempt = directHits(tried, reachHits);
+  widgetAttempts.forEach(({ attempt }, index) => {
+    const named = attempt.rel === "preconnect" && proxyLog.named.has(authorityKey(attempt.authority));
+    const next = widgetAttempts[index + 1]?.attempt.at ?? attempt.at + 250;
+    const looked = queries.filter((q) => q.name === String(attempt.host).toLowerCase());
+    const syn = synSent.filter((s) => s.port === Number(attempt.port));
+    const found = { named, untagged: null, direct: directByAttempt.get(attempt) ?? [], looked, syn };
+    evidence.set(attempt, found);
+    // Only Chromium (Windows) sends nothing on an http preconnect through a proxy; WebKit
+    // CONNECTs every one, so elsewhere an untagged connection credits nothing.
+    if (windows && !named && attempt.rel === "preconnect" && attempt.scheme === "http") unnamed.push({ attempt, found, until: next - 20 });
+  });
+  for (const pass of ["slot", "late"]) {
+    for (const { attempt, found, until } of unnamed) {
+      if (found.untagged !== null) continue;
+      const end = pass === "slot" ? until : attempt.at + 2000;
+      const index = free.findIndex((at) => at >= attempt.at - 20 && at < end);
+      if (index >= 0) found.untagged = free.splice(index, 1)[0];
+    }
+  }
+
+  for (const [side, label] of SIDES) {
+    const plan = plans[side] ?? [];
+    const ids = [...new Set(plan.map((a) => a.id))];
+    if (ids.length === 0) {
+      check(`${label}: reach plan`, false, "the report has no reach plan for this side");
+      continue;
+    }
+    for (const id of ids) {
+      const planned = plan.filter((a) => a.id === id);
+      const host = planned[0].host;
+      const parts = [];
+      let ok = true;
+      for (const target of planned) {
+        const attempt = tried[side].find((a) => a.id === target.id && a.scheme === target.scheme && a.rel === target.rel);
+        const name = target.rel === "dns-prefetch" ? "dns-prefetch" : target.scheme;
+        if (!attempt) {
+          ok = false;
+          parts.push(`${name}: not attempted`);
+          continue;
+        }
+        const { named, untagged, direct, looked, syn } = evidence.get(attempt);
+        const seen = [];
+        if (target.rel === "preconnect") {
+          if (named) seen.push(`CONNECT ${target.authority}`);
+          else if (untagged !== null) seen.push(`a proxy connection at +${untagged - attempt.at} ms (an http preconnect through a proxy sends nothing)`);
+          else if (witness && direct.length === 0 && syn.length === 0 && looked.length === 0) seen.push("seen by nothing (no CONNECT, no direct connection or attempt, no lookup)");
+          else {
+            ok = false;
+            seen.push(direct.length > 0 || syn.length > 0 || residual(id) ? "not in the proxy log" : "not in the proxy log (went past it, or never left)");
+          }
+        }
+        if (syn.length > 0) {
+          ok = false;
+          seen.push(`direct: a connection attempt to ${syn.map((s) => s.remote).join(", ")}`);
+        }
+        if (direct.length > 0) {
+          ok = false;
+          const counts = {};
+          for (const h of direct) counts[`tcp@${h.address} ${h.what}`] = (counts[`tcp@${h.address} ${h.what}`] ?? 0) + 1;
+          seen.push(`direct: ${Object.entries(counts).map(([what, n]) => (n > 1 ? `${n}× ${what}` : what)).join(", ")}`);
+        }
+        if (dnsMeasured && String(host).endsWith(report.dns.zone)) {
+          if (looked.length > 0) ok = false;
+          seen.push(dnsQueries(looked.length));
+        }
+        parts.push(`${name}: ${seen.join("; ")}`);
+      }
+      const rowId = `${label} → ${id} (${host})`;
+      const detail = parts.join(" · ");
+      if (residual(id)) {
+        checks.push({ id: `${rowId}: ${RESIDUAL}`, ok: true, info: true, residual: true, detail });
+      } else if (id === "dns-prefetch") {
+        const row = `${rowId}: no lookup outside the proxy`;
+        if (knownDnsPrefetch) checks.push({ id: row, ok, gate: true, known: MACOS_DNS_PREFETCH, detail: ok ? detail : `${detail} (${MACOS_DNS_PREFETCH})` });
+        else gate(row, ok, detail);
+      } else {
+        gate(`${rowId} reaches only the deny-all proxy`, ok, detail);
+      }
+    }
+    // Off macOS, nothing reaches this host directly at all (WebView2 proxies loopback too).
+    if (!macos) {
+      const hits = reachHits[side];
+      gate(`${label}: 0 direct connections to this host's own addresses`, hits.length === 0, hits.length === 0 ? "0 connections" : hits.map((h) => `tcp@${h.address} ${h.what}`).slice(0, 8).join("; "));
+    }
+  }
+
+  // Main isn't behind the widgets webview's proxy: none of its off-machine preconnects may
+  // reach it. This is the row that fails if the proxy lands on main's network (a shared data
+  // store, a proxy given to main).
+  const mainPlan = plans.main ?? [];
+  const mainName = "main's networking unchanged: its off-machine preconnects never reach the widgets' proxy";
+  if (mainPlan.length === 0) {
+    info(mainName, "n/a: main has no off-machine targets on this OS");
+  } else {
+    const preconnects = mainPlan.filter((a) => a.rel === "preconnect");
+    const missing = mainPlan.filter((t) => !tried.main.some((a) => a.id === t.id && a.scheme === t.scheme && a.rel === t.rel));
+    const proxied = preconnects.filter((a) => proxyLog.named.has(authorityKey(a.authority)));
+    check(
+      mainName,
+      missing.length === 0 && proxied.length === 0,
+      [
+        `main tried ${preconnects.map((a) => `${a.scheme}://${a.authority}`).join(", ")}`,
+        missing.length > 0 ? `not attempted: ${missing.map((a) => `${a.id} ${a.scheme}`).join(", ")}` : "",
+        proxied.length === 0 ? "0 in the proxy log" : `in the proxy log: ${proxied.map((a) => a.authority).join(", ")}`,
+      ]
+        .filter(Boolean)
+        .join("; "),
+    );
+  }
+
+  // DNS: only where CI routed the probe's zone to its listener.
+  const dnsRow = "DNS: the probe's zone reaches its listener (positive control: main's names are looked up there)";
+  if (!report.dns) {
+    info("DNS: widgets' names looked up", "not measured in this run: no resolver route to the probe's DNS listener (CI routes one on macOS and Windows)");
+  } else if (report.dns.error) {
+    check(dnsRow, false, `the DNS listener didn't start: ${report.dns.error}`);
+  } else {
+    const mainNames = mainPlan.filter((a) => String(a.host).endsWith(report.dns.zone));
+    const byName = (name) => queries.filter((q) => q.name === String(name).toLowerCase()).length;
+    const control = mainNames.find((a) => a.id === "dns-name");
+    const prefetch = mainNames.find((a) => a.id === "dns-prefetch");
+    check(
+      dnsRow,
+      control !== undefined && byName(control.host) >= 1,
+      control === undefined
+        ? "main has no name in the zone"
+        : `${dnsQueries(byName(control.host))} for ${control.host}; main's dns-prefetch name: ${prefetch ? dnsQueries(byName(prefetch.host)) : "not planned"}; ${dnsQueries(queries.length)} in all`,
+    );
+  }
+}
+
 function summarizeHits(hits) {
   const counts = {};
   for (const h of hits) counts[h.vector] = (counts[h.vector] ?? 0) + 1;
@@ -385,9 +762,11 @@ export function toMarkdown(title, checks) {
     "",
     verdict.noWebview
       ? "Agent-made widgets stay off: this OS has no widget webview in v0, so only the switch and main's checks apply."
-      : verdict.mayTurnOn
-        ? "Agent-made widgets: the probe passes in full here, so the owner may turn them on for this OS."
-        : `Agent-made widgets must stay **off** on this OS. Failing: ${verdict.why}.`,
+      : verdict.ineligible
+        ? `Agent-made HTML widgets are **not eligible** on this OS (the owner's decision): ${verdict.why}.`
+        : verdict.mayTurnOn
+          ? "Agent-made widgets: the probe passes in full here, so the owner may turn them on for this OS."
+          : `Agent-made widgets must stay **off** on this OS. Failing: ${verdict.why}.`,
     "",
     "✅ pass · ❌ fail · ⛔ fail that keeps agent-made widgets off (the switch is off, so the run continues) · ℹ️ recorded only",
     "",

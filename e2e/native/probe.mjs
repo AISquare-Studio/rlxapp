@@ -2,14 +2,24 @@
 // judges its report with probe-rules.mjs. It works the same on macOS, Windows and Linux
 // (under xvfb), and needs no WebDriver: the app probes itself and writes a report.
 //
-//   node e2e/native/probe.mjs [<e2e binary>] [--timeout 240]
+//   node e2e/native/probe.mjs [<e2e binary>] [--timeout 240] [--rtc-kept]
+//
+// On Windows it also samples `netstat -an` while the app runs, for TCP connection attempts
+// (SYN_SENT): the witness that a widget's preconnect off this host went nowhere, since
+// WebView2 sends nothing to the proxy for most of them. Main's direct attempt to its own
+// TEST-NET address is the witness's positive control (probe-rules.mjs).
+//
+// --rtc-kept runs it with frames.js's WebRTC removal skipped (RLXAPP_E2E_RTC=kept), to record
+// what the widgets webview's network setup alone does with WebRTC; its results go to
+// isolation-probe-<os>-webrtc-kept.*. With RLXAPP_E2E_DNS_PORT set (CI, with the probe's DNS
+// zone routed to that port), the app also measures DNS (src-tauri/src/e2e/dns.rs).
 //
 // The binary must come from `npm run e2e:build` (cargo feature `e2e`). The run writes:
 //   e2e/results/isolation-probe-<os>.json  the raw report plus the checks
 //   e2e/results/isolation-probe-<os>.md    the checks as a table
 // and appends the table to $GITHUB_STEP_SUMMARY in CI. The exit code is non-zero if any
 // check fails.
-import { spawn } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -22,10 +32,52 @@ import { stopTree } from "./processes.mjs";
 const sleep = (ms) => new Promise((done) => setTimeout(done, ms));
 
 /**
+ * Samples `netstat -an` every 200 ms (Windows only), keeping each remote endpoint seen in
+ * SYN_SENT with when it was first seen. `stop()` returns `{ samples, errors, synSent }`, with
+ * `synSent` as `"<ms> <remote>"` lines (IPv6 zones dropped).
+ */
+export function startNetstatWitness(platform = process.platform) {
+  if (platform !== "win32") return null;
+  const seen = new Map();
+  let samples = 0;
+  let errors = 0;
+  let stopped = false;
+  let timer = null;
+  const tick = () => {
+    execFile("netstat", ["-an"], { windowsHide: true, maxBuffer: 16 << 20 }, (error, stdout) => {
+      if (error) errors += 1;
+      else {
+        samples += 1;
+        for (const remote of synSentRemotes(stdout)) if (!seen.has(remote)) seen.set(remote, Date.now());
+      }
+      if (!stopped) timer = setTimeout(tick, 200);
+    });
+  };
+  tick();
+  return {
+    stop() {
+      stopped = true;
+      clearTimeout(timer);
+      return { samples, errors, synSent: [...seen].map(([remote, at]) => `${at} ${remote}`) };
+    },
+  };
+}
+
+/** The remote endpoints of `netstat -an` lines in SYN_SENT, IPv6 zones dropped. */
+export function synSentRemotes(text) {
+  const remotes = [];
+  for (const line of String(text).split(/\r?\n/)) {
+    const match = /^\s*TCP\s+\S+\s+(\S+)\s+SYN_SENT\b/i.exec(line);
+    if (match) remotes.push(match[1].replace(/%[^\]]+\]/, "]"));
+  }
+  return remotes;
+}
+
+/**
  * Launches `binary` with the probe on, waits for its report, stops it and judges the report.
  * @returns {Promise<{ ok: boolean, checks: ReturnType<typeof evaluate>, markdown: string }>}
  */
-export async function runProbe({ binary = defaultBinary(), timeoutMs = 240_000, log = console.log } = {}) {
+export async function runProbe({ binary = defaultBinary(), timeoutMs = 240_000, rtcKept = false, log = console.log } = {}) {
   binary = resolve(binary);
   if (!existsSync(binary)) throw new Error(`no e2e build at ${binary}; run \`npm run e2e:build\` first`);
 
@@ -33,8 +85,9 @@ export async function runProbe({ binary = defaultBinary(), timeoutMs = 240_000, 
   const reportPath = join(work, "report.json");
   let stderr = "";
   log(`probe: launching ${binary}`);
+  const witness = startNetstatWitness();
   const child = spawn(binary, [], {
-    env: { ...process.env, RLXAPP_E2E_REPORT: reportPath },
+    env: { ...process.env, RLXAPP_E2E_REPORT: reportPath, ...(rtcKept ? { RLXAPP_E2E_RTC: "kept" } : {}) },
     stdio: ["ignore", "inherit", "pipe"],
   });
   let exited = null;
@@ -66,15 +119,17 @@ export async function runProbe({ binary = defaultBinary(), timeoutMs = 240_000, 
   }
   await stopTree(child, () => exited !== null);
   rmSync(work, { recursive: true, force: true });
+  const netstat = witness?.stop() ?? null;
+  if (report && netstat) report.netstat = netstat;
 
   const checks = failure ? [{ id: "report", ok: false, blocking: true, detail: failure }] : evaluate(report, { stderr });
-  const title = `Widget isolation probe (${osName()})`;
+  const title = `Widget isolation probe (${osName()}${rtcKept ? ", WebRTC kept" : ""})`;
   const markdown = toMarkdown(title, checks);
   const ok = passed(checks);
 
   const results = join(repoRoot, "e2e", "results");
   mkdirSync(results, { recursive: true });
-  const base = join(results, `isolation-probe-${osName()}`);
+  const base = join(results, `isolation-probe-${osName()}${rtcKept ? "-webrtc-kept" : ""}`);
   writeFileSync(`${base}.json`, `${JSON.stringify({ ok, checks, report, droppedRaw: droppedRawMessages(stderr) }, null, 2)}\n`);
   writeFileSync(`${base}.md`, markdown);
   if (process.env.GITHUB_STEP_SUMMARY) appendFileSync(process.env.GITHUB_STEP_SUMMARY, `${markdown}\n`);
@@ -88,8 +143,8 @@ export async function runProbe({ binary = defaultBinary(), timeoutMs = 240_000, 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const { values, positionals } = parseArgs({
     allowPositionals: true,
-    options: { timeout: { type: "string", default: "240" } },
+    options: { timeout: { type: "string", default: "240" }, "rtc-kept": { type: "boolean", default: false } },
   });
-  const { ok } = await runProbe({ binary: positionals[0], timeoutMs: Number(values.timeout) * 1000 });
+  const { ok } = await runProbe({ binary: positionals[0], timeoutMs: Number(values.timeout) * 1000, rtcKept: values["rtc-kept"] });
   process.exit(ok ? 0 : 1);
 }
