@@ -13,13 +13,14 @@ import { FAKE_HOST_STORAGE_KEY, LocalHostStore } from "./hostStore.ts";
 
 class MemoryStorage implements DeviceStorage {
   readonly items = new Map<string, string>();
-  /** Writes throw, as a full or locked-down storage does. */
+  /** Writes throw, as a full or locked-down storage does: all of them, or to these keys. */
   failWrites = false;
+  readonly failKeys = new Set<string>();
   getItem(key: string): string | null {
     return this.items.get(key) ?? null;
   }
   setItem(key: string, value: string): void {
-    if (this.failWrites) throw new Error("QuotaExceededError");
+    if (this.failWrites || this.failKeys.has(key)) throw new Error("QuotaExceededError");
     this.items.set(key, value);
   }
   removeItem(key: string): void {
@@ -178,6 +179,39 @@ describe("FakeCore storage: the host's settings and this device's", () => {
     expect(migrateLegacySettings(storage, new DeviceStore(storage), host)).toBe(true);
     expect(storage.getItem(LEGACY_SETTINGS_KEY)).toBeNull();
     expect(host.load()?.settings.agentName).toBe("Kai");
+  });
+
+  it("writes the host first: if the host's write fails, nothing else changes, and a healthy relaunch migrates fully", () => {
+    const storage = new MemoryStorage();
+    const legacy = rcSettings();
+    storage.setItem(LEGACY_SETTINGS_KEY, legacy);
+    storage.failKeys.add(FAKE_HOST_STORAGE_KEY);
+    expect(migrateLegacySettings(storage, new DeviceStore(storage), new LocalHostStore(storage))).toBe(false);
+    // The device wasn't written either, so the next launch still sees a device with nothing stored.
+    expect(storage.getItem(DEVICE_STORAGE_KEY)).toBeNull();
+    expect(storage.getItem(LEGACY_SETTINGS_KEY)).toBe(legacy);
+
+    storage.failKeys.clear();
+    const device = new DeviceStore(storage);
+    const host = new LocalHostStore(storage);
+    expect(migrateLegacySettings(storage, device, host)).toBe(true);
+    expect(storage.getItem(LEGACY_SETTINGS_KEY)).toBeNull();
+    const { core } = make({ storage, device, host });
+    expect(core.snapshot().settings).toMatchObject({ onboarded: true, devMode: true, agentName: "Kai", ownerName: "Ana Li", mode: "light" });
+    expect(core.snapshot().agents.find((a) => a.id === "meetings-agent")?.state).toBe("paused");
+  });
+
+  it("finishes a migration an earlier build left half done: the device was written, the host wasn't", () => {
+    const storage = new MemoryStorage();
+    storage.setItem(LEGACY_SETTINGS_KEY, rcSettings());
+    storage.setItem(DEVICE_STORAGE_KEY, JSON.stringify({ onboarded: true, devMode: false, engineHome: "" }));
+    const device = new DeviceStore(storage);
+    const host = new LocalHostStore(storage);
+    expect(migrateLegacySettings(storage, device, host)).toBe(true);
+    expect(host.load()?.settings).toMatchObject({ agentName: "Kai", mode: "light" });
+    // The device's own settings since then are kept, not overwritten by rc's.
+    expect(device.get()).toEqual({ onboarded: true, devMode: false, engineHome: "" });
+    expect(storage.getItem(LEGACY_SETTINGS_KEY)).toBeNull();
   });
 
   it("shares one DeviceStore between cores: a device setting changed in one shows in the other", async () => {

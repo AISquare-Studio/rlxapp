@@ -106,21 +106,22 @@ function migrateHostSettings(legacy: Record<string, unknown>): Partial<AppSettin
 }
 
 /**
- * Moves the pre-seam settings (rc's `rlx.settings.v1`) once: the device keys into this device's
- * store, the host keys (names, theme, send modes, widgets, agents) into the host's store, with
- * connectors spelled as ids. Only on a device that hasn't stored its own settings yet, and
- * never over host data already there. The old key goes only once both writes have landed; if
- * either fails, it stays, and the next launch tries again. Returns whether it migrated.
+ * Moves the pre-seam settings (rc's `rlx.settings.v1`) once: the host keys (names, theme, send
+ * modes, widgets, agents) into the host's store, with connectors spelled as ids, then the device
+ * keys into this device's store. Host first: until the host's write lands, nothing else changes,
+ * so a failed attempt leaves everything for the next launch to retry. A store that already has
+ * data is never overwritten. The old key goes only once both stores hold their part. Returns
+ * whether the old key was moved and removed.
  */
 export function migrateLegacySettings(storage: DeviceStorage | null, device: DeviceStore, host: HostStore): boolean {
   const legacy = read(storage, LEGACY_SETTINGS_KEY);
-  if (!storage || !legacy || device.hasStored()) return false;
+  if (!storage || !legacy) return false;
   if (!host.load()) {
     const agents = Array.isArray(legacy.agents) ? (legacy.agents as Agent[]).map(migrateAgent) : [];
     host.save({ settings: migrateHostSettings(legacy), agents });
+    if (!host.load()) return false;
   }
-  const saved = device.update(pickDevice(legacy)) && read(storage, DEVICE_STORAGE_KEY) !== null && host.load() !== null;
-  if (!saved) return false;
+  if (!device.hasStored() && !(device.update(pickDevice(legacy)) && read(storage, DEVICE_STORAGE_KEY) !== null)) return false;
   try {
     storage.removeItem(LEGACY_SETTINGS_KEY);
   } catch {
