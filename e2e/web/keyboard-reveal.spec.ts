@@ -13,7 +13,7 @@ async function tabTo(page: Page, target: Locator, max = 200): Promise<void> {
   throw new Error("Tab never reached the target");
 }
 
-test("Home: an agent's next wake, a Slack item's time and the digest's interval show on keyboard focus", async ({ page }) => {
+test("Home: an agent's next wake, a Slack item's channel, reason and Draft reply, and the digest's interval show on keyboard focus", async ({ page }) => {
   await openShell(page);
   const wake = page.locator("#wake-meetings-agent");
   await expect(wake).toHaveCSS("opacity", "0");
@@ -28,10 +28,15 @@ test("Home: an agent's next wake, a Slack item's time and the digest's interval 
   await tabTo(page, meta);
   await expect(meta.locator(".reveal")).toHaveCSS("opacity", "1");
 
-  const item = slack.locator(".feed__item").first();
-  await expect(item.locator(".reveal")).toHaveCSS("opacity", "0");
+  // Each item is one line; the rest shows on focus, and Tab reaches its Draft reply.
+  const item = slack.locator(".feed__item--needs-you").first();
+  const draft = item.getByRole("button", { name: "Draft reply" });
+  await expect(item.locator(".reveal-block")).toBeHidden();
+  await expect(draft).toBeHidden();
   await tabTo(page, item);
-  await expect(item.locator(".reveal")).toHaveCSS("opacity", "1");
+  await expect(item.getByTestId("needs-you-why")).toBeVisible();
+  await tabTo(page, draft);
+  await expect(draft).toBeFocused();
 });
 
 test("Channel: a message's time and a priority item's reason show on keyboard focus; Escape hides the reason", async ({ page }) => {

@@ -89,6 +89,27 @@ describe("Slack digest", () => {
     }
   });
 
+  it("shows each item as one line, with its channel, reason and Draft reply behind hover or focus", async () => {
+    wrap(<SlackDigestWidget settingsOpen={false} />);
+    await screen.findByText(/Priya Shah/);
+    const items = [...document.querySelectorAll<HTMLElement>(".feed__item")];
+    expect(items.length).toBe(5);
+    for (const item of items) {
+      // The item's one line: its title, the only thing outside the reveal.
+      const shown = [...item.children].filter((child) => !child.classList.contains("reveal-block"));
+      expect(shown.map((child) => child.className)).toEqual(["feed__title feed__line"]);
+      expect(item.tabIndex).toBe(0);
+    }
+    for (const item of document.querySelectorAll<HTMLElement>(".feed__item--needs-you")) {
+      const more = item.querySelector<HTMLElement>(".reveal-block")!;
+      expect(within(more).getByTestId("needs-you-why")).toBeTruthy();
+      // Hidden until hover or focus: not in the accessibility tree by default.
+      expect(within(item).queryByRole("button", { name: "Draft reply" })).toBeNull();
+      expect(within(more).getByRole("button", { name: "Draft reply", hidden: true })).toBeTruthy();
+      expect(more.textContent).toMatch(/^(DM|#[\w-]+) · \d+ (min|h) ago/);
+    }
+  });
+
   it("lets the interval be changed", async () => {
     wrap(<SlackDigestWidget settingsOpen />);
     fireEvent.change(await screen.findByLabelText("Slack digest interval"), { target: { value: "30" } });

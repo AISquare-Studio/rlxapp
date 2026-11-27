@@ -756,7 +756,7 @@ input[type="color"] {
   padding: 0;
   display: flex;
   flex-direction: column;
-  gap: var(--rlx-space-2);
+  gap: var(--rlx-space-1);
 }
 
 /* Items sit on the widget itself, grouped by spacing: no card inside the card. */
@@ -786,14 +786,30 @@ input[type="color"] {
   font-weight: 600;
 }
 
-.feed__sub {
+/* One line per item, its title; the rest shows on hover or keyboard focus (as Gmail's mail),
+   and the line unwraps then. */
+.feed__line {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.reveal-host:hover > .feed__line,
+.reveal-host:focus-within > .feed__line {
+  white-space: normal;
+}
+
+.feed__more p {
+  margin: var(--rlx-space-1) 0 0;
   font-size: var(--rlx-text-sm);
-  color: var(--rlx-muted);
+}
+
+.feed__more .button {
+  margin-top: var(--rlx-space-2);
 }
 
 .feed__why {
-  margin: var(--rlx-space-1) 0 var(--rlx-space-2);
-  font-size: var(--rlx-text-sm);
   color: var(--rlx-foreground);
 }
 

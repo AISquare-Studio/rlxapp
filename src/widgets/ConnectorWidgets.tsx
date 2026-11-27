@@ -1,5 +1,5 @@
 import { useEffect, useState, type ReactNode } from "react";
-import type { Feed, GmailDashboard } from "../engine/fake/data.ts";
+import type { Feed, FeedItem, GmailDashboard } from "../engine/fake/data.ts";
 import { useEngineData, useNow } from "../engine/hooks.ts";
 import { useApp } from "../state/context.ts";
 import type { Draft } from "../state/model.ts";
@@ -29,6 +29,29 @@ function useCreateDraft() {
 }
 
 const SLACK_INTERVALS = [5, 10, 15, 30, 60] as const;
+
+/**
+ * One feed item, calm: a single line, its title. The channel, time, the reason it needs you
+ * and any action show on hover or keyboard focus, as Gmail's mail does, and the line unwraps
+ * then.
+ */
+function FeedRow({ item, action }: { item: FeedItem; action?: ReactNode }) {
+  const meta = [item.subtitle, item.time].filter(Boolean).join(" · ");
+  return (
+    <li className={`feed__item reveal-host${item.needsYou ? " feed__item--needs-you" : ""}`} tabIndex={0}>
+      <div className="feed__title feed__line">{item.title}</div>
+      <div className="reveal-block feed__more">
+        {meta ? <p className="muted">{meta}</p> : null}
+        {item.needsYou && item.why ? (
+          <p className="feed__why" data-testid="needs-you-why">
+            <strong>Needs you:</strong> {item.why}
+          </p>
+        ) : null}
+        {action}
+      </div>
+    </li>
+  );
+}
 
 export function SlackDigestWidget({ settingsOpen }: { settingsOpen: boolean }) {
   const { state, updateSettings, dispatch, demo } = useApp();
@@ -106,17 +129,11 @@ export function SlackDigestWidget({ settingsOpen }: { settingsOpen: boolean }) {
           <p className="feed__summary">{data.summary}</p>
           <ul className="feed__list">
             {data.items.map((item) => (
-              <li key={item.id} className={`feed__item reveal-host${item.needsYou ? " feed__item--needs-you" : ""}`} tabIndex={0}>
-                <div className="feed__title">{item.title}</div>
-                <div className="feed__sub">
-                  {item.subtitle}
-                  <span className="reveal"> · {item.time}</span>
-                </div>
-                {item.needsYou ? (
-                  <>
-                    <div className="feed__why" data-testid="needs-you-why">
-                      <strong>Needs you:</strong> {item.why}
-                    </div>
+              <FeedRow
+                key={item.id}
+                item={item}
+                action={
+                  item.needsYou ? (
                     <button
                       type="button"
                       className="button button--sm"
@@ -132,9 +149,9 @@ export function SlackDigestWidget({ settingsOpen }: { settingsOpen: boolean }) {
                     >
                       Draft reply
                     </button>
-                  </>
-                ) : null}
-              </li>
+                  ) : undefined
+                }
+              />
             ))}
           </ul>
         </>
@@ -317,18 +334,7 @@ export function GenericConnectorWidget({ manifest }: { manifest: GenericManifest
       <p className="feed__summary">{data.summary}</p>
       <ul className="feed__list">
         {data.items.map((item) => (
-          <li key={item.id} className={`feed__item reveal-host${item.needsYou ? " feed__item--needs-you" : ""}`} tabIndex={0}>
-            <div className="feed__title">{item.title}</div>
-            <div className="feed__sub">
-              {item.subtitle}
-              <span className="reveal"> · {item.time}</span>
-            </div>
-            {item.needsYou && item.why ? (
-              <div className="feed__why">
-                <strong>Needs you:</strong> {item.why}
-              </div>
-            ) : null}
-          </li>
+          <FeedRow key={item.id} item={item} />
         ))}
       </ul>
     </div>
